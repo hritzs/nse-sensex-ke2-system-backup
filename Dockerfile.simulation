@@ -1,0 +1,17 @@
+﻿FROM python:3.14-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY simulation_server_2.py /app/simulation_server_2.py
+COPY frontend/ /app/frontend/
+
+RUN pip install --no-cache-dir websockets==17.0.1
+
+RUN mkdir -p /app/data /app/logs
+
+EXPOSE 8000
+
+CMD ["python", "simulation_server_2.py"]

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>NSE FO Live Dashboard</title>
+
+<style>
+body{
+    margin:0;
+    background:#0b0f14;
+    color:#e6edf3;
+    font-family:Consolas,monospace;
+}
+
+.header{
+    padding:14px;
+    font-size:24px;
+    font-weight:bold;
+    text-align:center;
+    background:#111827;
+    border-bottom:1px solid #333;
+}
+
+.grid{
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr;
+    gap:12px;
+    padding:12px;
+}
+
+.panel{
+    background:#111827;
+    border:1px solid #333;
+    border-radius:8px;
+    padding:10px;
+    min-height:600px;
+}
+
+.title{
+    font-size:18px;
+    margin-bottom:10px;
+    color:#60a5fa;
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    font-size:13px;
+}
+
+th,td{
+    padding:6px;
+    border-bottom:1px solid #222;
+    text-align:right;
+}
+
+th:first-child,td:first-child{
+    text-align:left;
+}
+</style>
+</head>
+
+<body>
+
+<div class="header">NSE FO LIVE DASHBOARD</div>
+
+<div class="grid">
+
+<div class="panel">
+<div class="title">Live Ticks</div>
+<table id="ticks"></table>
+</div>
+
+<div class="panel">
+<div class="title">Top Movers</div>
+<table id="movers"></table>
+</div>
+
+<div class="panel">
+<div class="title">Most Active</div>
+<table id="active"></table>
+</div>
+
+</div>
+
+<script>
+
+async function load(url){
+    let r = await fetch("http://localhost:8000"+url);
+    return await r.json();
+}
+
+function makeTable(id, rows){
+
+    let el = document.getElementById(id);
+
+    if(rows.length===0){
+        el.innerHTML = "<tr><td>No Data</td></tr>";
+        return;
+    }
+
+    let keys = Object.keys(rows[0]);
+
+    let html = "<tr>";
+    keys.forEach(k=> html += "<th>"+k+"</th>");
+    html += "</tr>";
+
+    rows.forEach(r=>{
+        html += "<tr>";
+        keys.forEach(k=> html += "<td>"+r[k]+"</td>");
+        html += "</tr>";
+    });
+
+    el.innerHTML = html;
+}
+
+async function refresh(){
+
+    makeTable("ticks", await load("/ticks"));
+    makeTable("movers", await load("/movers"));
+    makeTable("active", await load("/active"));
+}
+
+refresh();
+setInterval(refresh,1000);
+
+</script>
+
+</body>
+</html>

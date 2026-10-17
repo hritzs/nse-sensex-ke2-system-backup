@@ -1,0 +1,5 @@
+# Numerical dependencies for the opt-in fixed-time engine; websocket dependency in requirements-ke2.txt
+numpy==2.5.2
+pandas==3.0.5
+openpyxl==3.1.5
+et-xmlfile==2.0.0

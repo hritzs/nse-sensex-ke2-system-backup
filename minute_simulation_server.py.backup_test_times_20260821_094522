@@ -1,0 +1,7572 @@
+#!/usr/bin/env python3
+"""
+Clean NIFTY minute-by-minute straddle simulator.
+
+Design:
+    C++ decoder :9001
+            |
+            v
+    one normalized live market book
+            |
+            +--> 09:16 engine
+            +--> 09:17 engine
+            +--> 09:18 engine
+            +--> 09:19 engine
+            +--> NOW engine
+
+Important:
+- This file is independent from the legacy simulation_server.py.
+- It does not load LUTs.
+- It does not load the GammaShortDaily reference file.
+- It does not use the old five-stage signal engine.
+- It keeps independent state for every run.
+- START NOW builds immediately from the current complete live chain.
+- Every active run records one minute snapshot at most once per wall-clock minute.
+
+Quote policy:
+The current C++ feed seen during debugging was producing invalid bid/ask values
+(e.g. CE bid=0 and ask=5242.88 for a ~24150 ATM option). Therefore this clean
+simulator deliberately uses LTP for simulated entry/exit marking when the
+bid/ask pair fails sanity checks. It reports quote_source=LTP_FALLBACK rather
+than pretending the bad bid/ask are executable prices.
+
+Once the C++ top-of-book parser is corrected, set USE_LTP_FALLBACK=False to
+require a valid bid/ask pair.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+import math
+import threading
+import time as time_module
+from dataclasses import dataclass, field
+from datetime import datetime, time, timedelta
+from typing import Any
+from pathlib import Path
+
+from zoneinfo import ZoneInfo
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import websockets
+
+
+IST = ZoneInfo("Asia/Kolkata")
+
+WS_URI = "ws://127.0.0.1:9001"
+HTTP_HOST = "0.0.0.0"
+HTTP_PORT = 8001
+
+RUN_IDS = ("0916", "0917", "0918", "0919", "NOW")
+FIXED_STARTS = {
+    "0916": time(9, 16),
+    "0917": time(9, 17),
+    "0918": time(9, 18),
+    "0919": time(9, 19),
+}
+
+MARKET_OPEN = time(9, 15)
+MARKET_CLOSE = time(15, 40)
+
+# Existing strategy/risk values from the legacy simulator.
+SL_BPS = 14.0
+TV_THRESH = 0.00015
+TV4_THRESH = 0.00060
+IV_DROP_THRESH = 0.10
+
+# Avoid the currently broken top-of-book fields until the C++ parser
+# is corrected.
+USE_LTP_FALLBACK = True
+
+RISK_FREE_RATE = 0.0
+
+# ============================================================
+# EXPLICIT TARGET EXPIRY
+#
+# No longer a hardcoded constant. The active expiry is now a
+# runtime value on MarketBook (book.target_expiry), set only
+# via GET /api/select_expiry?expiry=... after confirming it
+# appears in /api/expiries (i.e. the feed is actually sending
+# complete ATM CE/PE/syn_fut data for it right now).
+#
+# No simulation run (0916/0917/0918/0919/NOW) may arm or
+# build until this has been explicitly set for the day.
+# ============================================================
+
+
+# ============================================================
+# DURABLE SIMULATION STATE
+# ============================================================
+
+MINUTE_SIM_DB_PATH = (
+    Path(__file__).resolve().parent
+    / "data"
+    / "minute_simulation.db"
+)
+
+
+def _sim_db_connect():
+    MINUTE_SIM_DB_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    return sqlite3.connect(
+        MINUTE_SIM_DB_PATH,
+        timeout=10,
+    )
+
+
+def _sim_db_init():
+    conn = _sim_db_connect()
+
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS simulation_state (
+                run_id TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (trade_date, run_id)
+            )
+            """
+        )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
+def _sim_clean(value):
+
+    if value is None:
+        return None
+
+    if isinstance(
+        value,
+        (str, int, bool),
+    ):
+        return value
+
+    if isinstance(value, float):
+
+        if (
+            value != value
+            or value in (
+                float("inf"),
+                float("-inf"),
+            )
+        ):
+            return None
+
+        return value
+
+    if isinstance(value, dict):
+        return {
+            str(k): _sim_clean(v)
+            for k, v in value.items()
+        }
+
+    if isinstance(value, (list, tuple)):
+        return [
+            _sim_clean(v)
+            for v in value
+        ]
+
+    try:
+        return float(value)
+    except Exception:
+        return str(value)
+
+
+def _sim_snapshot(sim):
+
+    return _sim_clean({
+        "run_id": sim.run_id,
+
+        "armed":
+            bool(sim.armed),
+
+        "started":
+            bool(sim.started),
+
+        "completed":
+            bool(sim.completed),
+
+        "request_timestamp":
+            getattr(
+                sim,
+                "request_timestamp",
+                None,
+            ),
+
+        "start_timestamp":
+            getattr(
+                sim,
+                "start_timestamp",
+                None,
+            ),
+
+        "scheduled_start":
+            (
+                sim.scheduled_start.isoformat()
+                if getattr(
+                    sim,
+                    "scheduled_start",
+                    None,
+                ) is not None
+                else None
+            ),
+
+        "exit_timestamp":
+            getattr(
+                sim,
+                "exit_timestamp",
+                None,
+            ),
+
+        "entry_timestamp":
+            getattr(
+                sim,
+                "entry_timestamp",
+                None,
+            ),
+
+        "entry_expiry":
+            getattr(
+                sim,
+                "entry_expiry",
+                None,
+            ),
+
+        "entry_atm":
+            getattr(
+                sim,
+                "entry_atm",
+                None,
+            ),
+
+        "entry_ce_symbol":
+            getattr(
+                sim,
+                "entry_ce_symbol",
+                None,
+            ),
+
+        "entry_pe_symbol":
+            getattr(
+                sim,
+                "entry_pe_symbol",
+                None,
+            ),
+
+        "entry_ce":
+            getattr(
+                sim,
+                "entry_ce",
+                None,
+            ),
+
+        "entry_pe":
+            getattr(
+                sim,
+                "entry_pe",
+                None,
+            ),
+
+        "entry_straddle":
+            getattr(
+                sim,
+                "entry_straddle",
+                None,
+            ),
+
+        "entry_spot":
+            getattr(
+                sim,
+                "entry_spot",
+                None,
+            ),
+
+        "entry_future":
+            getattr(
+                sim,
+                "entry_future",
+                None,
+            ),
+
+        "current_ce":
+            getattr(
+                sim,
+                "current_ce",
+                None,
+            ),
+
+        "current_pe":
+            getattr(
+                sim,
+                "current_pe",
+                None,
+            ),
+
+        "current_straddle":
+            getattr(
+                sim,
+                "current_straddle",
+                None,
+            ),
+
+        "market_atm":
+            getattr(
+                sim,
+                "market_atm",
+                None,
+            ),
+
+        "market_ce":
+            getattr(
+                sim,
+                "market_ce",
+                None,
+            ),
+
+        "market_pe":
+            getattr(
+                sim,
+                "market_pe",
+                None,
+            ),
+
+        "market_straddle":
+            getattr(
+                sim,
+                "market_straddle",
+                None,
+            ),
+
+        "delta":
+            getattr(
+                sim,
+                "delta",
+                None,
+            ),
+
+        "gamma":
+            getattr(
+                sim,
+                "gamma",
+                None,
+            ),
+
+        "theta":
+            getattr(
+                sim,
+                "theta",
+                None,
+            ),
+
+        "vega":
+            getattr(
+                sim,
+                "vega",
+                None,
+            ),
+
+        "hedge":
+            getattr(
+                sim,
+                "hedge",
+                None,
+            ),
+
+        "hedge_target":
+            getattr(
+                sim,
+                "hedge_target",
+                None,
+            ),
+
+        "points_out":
+            getattr(
+                sim,
+                "points_out",
+                None,
+            ),
+
+        "points_allowed":
+            getattr(
+                sim,
+                "points_allowed",
+                None,
+            ),
+
+        "option_pnl":
+            getattr(
+                sim,
+                "option_pnl",
+                None,
+            ),
+
+        "future_pnl":
+            getattr(
+                sim,
+                "future_pnl",
+                None,
+            ),
+
+        "total_pnl":
+            getattr(
+                sim,
+                "total_pnl",
+                None,
+            ),
+
+        "exit_reason":
+            getattr(
+                sim,
+                "exit_reason",
+                None,
+            ),
+
+        "entry_block_reason":
+            getattr(
+                sim,
+                "entry_block_reason",
+                None,
+            ),
+
+        "history":
+            getattr(
+                sim,
+                "history",
+                [],
+            )[-500:],
+
+        "hedge_events":
+            getattr(
+                sim,
+                "hedge_events",
+                [],
+            )[-500:],
+
+        "trade_history":
+            getattr(
+                sim,
+                "trade_history",
+                [],
+            )[-50:],
+    })
+
+
+def _sim_persist(sim):
+
+    try:
+
+        payload = _sim_snapshot(sim)
+
+        status = (
+            "COMPLETED"
+            if sim.completed
+            else (
+                "RUNNING"
+                if sim.started
+                else (
+                    "ARMED"
+                    if sim.armed
+                    else "WAITING"
+                )
+            )
+        )
+
+        conn = _sim_db_connect()
+
+        try:
+
+            conn.execute(
+                """
+                INSERT INTO simulation_state (
+                    run_id,
+                    trade_date,
+                    status,
+                    payload,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+
+                ON CONFLICT(trade_date, run_id)
+                DO UPDATE SET
+                      status=excluded.status,
+                      payload=excluded.payload,
+                      updated_at=excluded.updated_at
+                """,
+                (
+                    sim.run_id,
+                    now_ist().date().isoformat(),
+                    status,
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    ),
+                    now_ist().isoformat(
+                        timespec="seconds"
+                    ),
+                ),
+            )
+
+            conn.commit()
+
+        finally:
+            conn.close()
+
+    except Exception as exc:
+
+        print(
+            "[SIM DB] persist failed:",
+            repr(exc),
+        )
+
+
+def _sim_restore(run_id):
+
+    try:
+
+        conn = _sim_db_connect()
+
+        try:
+
+            row = conn.execute(
+                """
+                SELECT payload
+                FROM simulation_state
+                WHERE run_id=?
+                  AND trade_date=?
+                LIMIT 1
+                """,
+                (
+                    run_id,
+                    now_ist().date().isoformat(),
+                ),
+            ).fetchone()
+
+        finally:
+            conn.close()
+
+        if not row:
+            return None
+
+        payload = json.loads(
+            row[0]
+        )
+
+        return (
+            payload
+            if isinstance(payload, dict)
+            else None
+        )
+
+    except Exception as exc:
+
+        print(
+            "[SIM DB] restore failed:",
+            repr(exc),
+        )
+
+        return None
+
+
+def _sim_apply_restore(sim, payload):
+
+    if not payload:
+        return
+
+    fields = (
+        "request_timestamp",
+        "start_timestamp",
+        "entry_timestamp",
+        "exit_timestamp",
+        "entry_expiry",
+        "entry_atm",
+        "entry_ce_symbol",
+        "entry_pe_symbol",
+        "entry_ce",
+        "entry_pe",
+        "entry_straddle",
+        "entry_spot",
+        "entry_future",
+        "current_ce",
+        "current_pe",
+        "current_straddle",
+        "market_atm",
+        "market_ce",
+        "market_pe",
+        "market_straddle",
+        "delta",
+        "gamma",
+        "theta",
+        "vega",
+        "hedge",
+        "hedge_target",
+        "points_out",
+        "points_allowed",
+        "option_pnl",
+        "future_pnl",
+        "total_pnl",
+        "exit_reason",
+        "entry_block_reason",
+    )
+
+    for name in fields:
+
+        if name in payload:
+            setattr(
+                sim,
+                name,
+                payload[name],
+            )
+
+    sim.armed = bool(
+        payload.get("armed", False)
+    )
+
+    sim.started = bool(
+        payload.get("started", False)
+    )
+
+    sim.completed = bool(
+        payload.get("completed", False)
+    )
+
+    scheduled = payload.get(
+        "scheduled_start"
+    )
+
+    if scheduled:
+
+        try:
+            sim.scheduled_start = (
+                datetime.fromisoformat(
+                    scheduled
+                )
+            )
+        except Exception:
+            pass
+
+    sim.history = list(
+        payload.get(
+            "history",
+            [],
+        )
+    )
+
+    sim.hedge_events = list(
+        payload.get(
+            "hedge_events",
+            [],
+        )
+    )
+
+    sim.trade_history = list(
+        payload.get(
+            "trade_history",
+            [],
+        )
+    )
+
+
+_sim_db_init()
+
+
+
+def now_ist() -> datetime:
+    return datetime.now(IST)
+
+
+def finite(value: Any) -> float | None:
+    try:
+        x = float(value)
+        return x if math.isfinite(x) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def norm_iv(value: Any) -> float | None:
+    """Accept IV as either decimal or percentage."""
+    x = finite(value)
+    if x is None or x <= 0:
+        return None
+    if x > 2.0:
+        return x / 100.0
+    return x
+
+
+def norm_symbol(symbol: Any) -> str:
+    return str(symbol or "").strip()
+
+
+def parse_symbol(symbol: str) -> tuple[str | None, str | None, float | None, str | None]:
+    """
+    Expected current C++ pipe format:
+        NIFTY|25-AUG-26|24150|CE
+        NIFTY|25-AUG-26|0|FUT
+    """
+    parts = symbol.split("|")
+    if len(parts) >= 4:
+        underlying = parts[0].strip().upper()
+        expiry = parts[1].strip()
+        try:
+            strike = float(parts[2])
+        except (TypeError, ValueError):
+            strike = None
+        opt_type = parts[3].strip().upper()
+        return underlying, expiry, strike, opt_type
+
+    # Fallback legacy compact symbols.
+    upper = symbol.upper()
+    for opt_type in ("CE", "PE", "FUT"):
+        if upper.endswith(opt_type):
+            body = upper[:-len(opt_type)]
+            # Best-effort only; pipe-format is authoritative.
+            return "NIFTY", None, None, opt_type
+
+    return None, None, None, None
+
+
+def expiry_datetime(expiry: str) -> datetime | None:
+    """
+    Parse 25-AUG-26 / 25-AUG-2026 and treat expiry settlement as 15:30 IST.
+    Weekend adjustment is handled by stepping backwards to a weekday.
+    """
+    expiry = str(expiry or "").strip()
+    for fmt in ("%d-%b-%y", "%d-%b-%Y"):
+        try:
+            d = datetime.strptime(expiry.upper(), fmt).date()
+            dt = datetime.combine(d, time(15, 30), tzinfo=IST)
+            while dt.weekday() >= 5:
+                dt -= timedelta(days=1)
+            return dt
+        except ValueError:
+            continue
+    return None
+
+
+def exact_dte(expiry: str, now: datetime | None = None) -> float | None:
+    end = expiry_datetime(expiry)
+    if end is None:
+        return None
+    current = now or now_ist()
+    seconds = (end - current).total_seconds()
+    return max(seconds / 86400.0, 0.0)
+
+
+def norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def norm_pdf(x: float) -> float:
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def bs_price(is_call: bool, spot: float, strike: float, t: float, rate: float, vol: float) -> float:
+    if spot <= 0 or strike <= 0 or t <= 0 or vol <= 0:
+        intrinsic = max(spot - strike, 0.0) if is_call else max(strike - spot, 0.0)
+        return intrinsic
+
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * vol * vol) * t) / (vol * sqrt_t)
+    d2 = d1 - vol * sqrt_t
+
+    if is_call:
+        return spot * norm_cdf(d1) - strike * math.exp(-rate * t) * norm_cdf(d2)
+    return strike * math.exp(-rate * t) * norm_cdf(-d2) - spot * norm_cdf(-d1)
+
+
+def bs_greeks(is_call: bool, spot: float, strike: float, t: float, rate: float, vol: float) -> dict[str, float]:
+    if spot <= 0 or strike <= 0 or t <= 0 or vol <= 0:
+        delta = 1.0 if is_call else -1.0
+        return {"delta": delta, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * vol * vol) * t) / (vol * sqrt_t)
+    d2 = d1 - vol * sqrt_t
+
+    disc = math.exp(-rate * t)
+    pdf = norm_pdf(d1)
+
+    if is_call:
+        delta = norm_cdf(d1)
+        theta = (
+            -(spot * pdf * vol) / (2.0 * sqrt_t)
+            - rate * strike * disc * norm_cdf(d2)
+        ) / 365.0
+    else:
+        delta = norm_cdf(d1) - 1.0
+        theta = (
+            -(spot * pdf * vol) / (2.0 * sqrt_t)
+            + rate * strike * disc * norm_cdf(-d2)
+        ) / 365.0
+
+    gamma = pdf / (spot * vol * sqrt_t)
+    vega = spot * pdf * sqrt_t / 100.0
+
+    return {
+        "delta": delta,
+        "gamma": gamma,
+        "theta": theta,
+        "vega": vega,
+    }
+
+
+def implied_vol_from_price(
+    is_call: bool,
+    spot: float,
+    strike: float,
+    t: float,
+    price: float,
+    rate: float = RISK_FREE_RATE,
+) -> float | None:
+    """
+    Robust bisection fallback if the C++ message does not carry IV.
+    """
+    if not all(math.isfinite(x) for x in (spot, strike, t, price)):
+        return None
+    if spot <= 0 or strike <= 0 or t <= 0 or price <= 0:
+        return None
+
+    intrinsic = max(spot - strike, 0.0) if is_call else max(strike - spot, 0.0)
+    if price <= intrinsic:
+        return None
+
+    lo, hi = 1e-6, 5.0
+    p_hi = bs_price(is_call, spot, strike, t, rate, hi)
+    if price > p_hi:
+        return None
+
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        p = bs_price(is_call, spot, strike, t, rate, mid)
+        if p > price:
+            hi = mid
+        else:
+            lo = mid
+
+    return 0.5 * (lo + hi)
+
+
+@dataclass
+class Quote:
+    symbol: str
+    expiry: str
+    strike: float
+    option_type: str
+    ltp: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    iv: float | None = None
+    timestamp: Any = None
+    delta: float | None = None
+    gamma: float | None = None
+    quote_source: str = "NONE"
+
+    def mark(self) -> float | None:
+        return self.ltp
+
+    def executable_entry(self) -> float | None:
+        if (
+            self.bid is not None
+            and self.ask is not None
+            and self.bid > 0
+            and self.ask > 0
+            and self.ask >= self.bid
+            and self.ask < max(1000.0, 10.0 * max(self.ltp or 0.0, 1.0))
+        ):
+            return self.bid
+
+        if USE_LTP_FALLBACK and self.ltp is not None and self.ltp > 0:
+            return self.ltp
+
+        return None
+
+    def executable_exit(self) -> float | None:
+        if (
+            self.bid is not None
+            and self.ask is not None
+            and self.bid > 0
+            and self.ask > 0
+            and self.ask >= self.bid
+            and self.ask < max(1000.0, 10.0 * max(self.ltp or 0.0, 1.0))
+        ):
+            return self.ask
+
+        if USE_LTP_FALLBACK and self.ltp is not None and self.ltp > 0:
+            return self.ltp
+
+        return None
+
+
+class MarketBook:
+
+    def __init__(self):
+        self.lock = threading.RLock()
+
+        self.options = {}
+
+        # --------------------------------------------------------
+        # ACTUAL NIFTY FUTURE
+        # future_quote -> LTP
+        # --------------------------------------------------------
+        self.futures = {}
+        self.future_timestamps = {}
+
+        # --------------------------------------------------------
+        # AUTHORITATIVE SYNTHETIC FUTURE
+        #
+        # analytics -> syn_fut, maintained separately by expiry.
+        #
+        # The original production engine uses:
+        #
+        #     syn_fut_by_expiry[selected_expiry]
+        #
+        # as the simulation underlying / synthetic spot.
+        # --------------------------------------------------------
+        self.syn_fut_by_expiry = {}
+        self.syn_fut_timestamps = {}
+
+        # Raw NIFTY index spot. DISPLAY / REFERENCE ONLY.
+        self.index_spot = None
+
+        self.latest_timestamp = None
+        self.last_messages = 0
+
+        # ========================================================
+        # ATOMIC C++ ATM STATE
+        #
+        # The simulation MUST NOT combine independently arriving
+        # CE / PE / syn_fut packets.
+        #
+        # One state per expiry contains:
+        #   syn_fut
+        #   atm_strike
+        #   ATM CE
+        #   ATM PE
+        #   CE sequence
+        #   PE sequence
+        #   completion sequence
+        #   receive timestamp
+        # ========================================================
+
+        self.cpp_atm_state = {}
+
+        # Must be explicitly set via /api/select_expiry before
+        # any simulation run is allowed to arm/build.
+        self.target_expiry = None
+
+        self.cpp_sequence = 0
+        self.cpp_complete_state_sequence = 0
+
+        # Last packet sequence per option.
+        self.quote_sequence = {}
+
+        # Last analytics sequence observed.
+        self.analytics_sequence = 0
+
+
+    def update(self, raw):
+        if not isinstance(raw, dict):
+            return
+
+        msg_type = str(
+            raw.get("type", "")
+        ).strip().lower()
+
+        symbol = str(
+            raw.get("symbol")
+            or raw.get("sym")
+            or ""
+        ).strip()
+
+        if not symbol:
+            return
+
+        upper = symbol.upper()
+
+        underlying = str(
+            raw.get("underlying", "")
+        ).strip().upper()
+
+        expiry = str(
+            raw.get("expiry", "")
+        ).strip()
+
+        strike = finite(
+            raw.get("strike")
+        )
+
+        # ========================================================
+        # STRICT NIFTY FILTER
+        # ========================================================
+
+        if not (
+            underlying == "NIFTY"
+            or upper.startswith("NIFTY|")
+            or (
+                upper.startswith("NIFTY")
+                and not upper.startswith("NIFTYNXT50")
+            )
+        ):
+            return
+
+        now = now_ist()
+
+        timestamp = (
+            raw.get("timestamp")
+            or raw.get("published_at")
+        )
+
+        # ========================================================
+        # ACTUAL FUTURE
+        #
+        # Reference/display only.
+        # Never used as the strategy underlying.
+        # ========================================================
+
+        if msg_type == "future_quote":
+
+            ltp = finite(
+                raw.get("ltp")
+            )
+
+            if (
+                expiry
+                and ltp is not None
+                and ltp > 0
+            ):
+                with self.lock:
+
+                    self.futures[
+                        expiry
+                    ] = ltp
+
+                    self.future_timestamps[
+                        expiry
+                    ] = now
+
+                    self.latest_timestamp = timestamp
+
+                    self.last_messages += 1
+
+            return
+
+        # ========================================================
+        # ANALYTICS
+        #
+        # C++ analytics contains:
+        #
+        #   spot
+        #   syn_fut
+        #   atm_strike
+        #   option quote
+        #
+        # IMPORTANT:
+        #
+        # syn_fut is stored as authoritative C++ state,
+        # BUT it is NOT immediately consumed by the simulation.
+        #
+        # The simulation consumes it only after ATM CE + ATM PE
+        # have been captured into the same atomic state.
+        # ========================================================
+
+        if msg_type != "analytics":
+            return
+
+        raw_spot = finite(
+            raw.get("spot")
+        )
+
+        syn_fut = finite(
+            raw.get("syn_fut")
+        )
+
+        cpp_atm = finite(
+            raw.get("atm_strike")
+        )
+
+        # C++ does not appear to expose a guaranteed global
+        # packet sequence in the examples. Therefore maintain
+        # our own monotonically increasing receive sequence.
+        with self.lock:
+
+            self.cpp_sequence += 1
+            packet_sequence = self.cpp_sequence
+
+            self.analytics_sequence = packet_sequence
+
+            if (
+                raw_spot is not None
+                and raw_spot > 0
+            ):
+                self.index_spot = raw_spot
+
+            if (
+                expiry
+                and syn_fut is not None
+                and syn_fut > 0
+            ):
+                self.syn_fut_by_expiry[
+                    expiry
+                ] = syn_fut
+
+                self.syn_fut_timestamps[
+                    expiry
+                ] = now
+
+            self.latest_timestamp = timestamp
+
+            self.last_messages += 1
+
+        # ========================================================
+        # OPTION TYPE
+        # ========================================================
+
+        option_type = None
+
+        if upper.endswith("CE"):
+            option_type = "CE"
+
+        elif upper.endswith("PE"):
+            option_type = "PE"
+
+        else:
+            parts = symbol.split("|")
+
+            if len(parts) >= 4:
+                option_type = (
+                    str(parts[3])
+                    .strip()
+                    .upper()
+                )
+
+        if option_type not in (
+            "CE",
+            "PE",
+        ):
+            return
+
+        if not expiry or strike is None:
+            return
+
+        ltp = finite(
+            raw.get("ltp")
+        )
+
+        bid = finite(
+            raw.get(
+                "bid1",
+                raw.get(
+                    "bid",
+                    raw.get("Bid")
+                )
+            )
+        )
+
+        ask = finite(
+            raw.get(
+                "ask1",
+                raw.get(
+                    "ask",
+                    raw.get("Ask")
+                )
+            )
+        )
+
+        iv = norm_iv(
+            raw.get("iv")
+        )
+
+        q = Quote(
+            symbol=symbol,
+            expiry=expiry,
+            strike=float(strike),
+            option_type=option_type,
+            ltp=ltp,
+            bid=bid,
+            ask=ask,
+            iv=iv,
+            timestamp=timestamp,
+            delta=finite(
+                raw.get("delta")
+            ),
+            gamma=finite(
+                raw.get("gamma")
+            ),
+        )
+
+        # ========================================================
+        # QUOTE SOURCE
+        # ========================================================
+
+        if (
+            q.ask is not None
+            and (
+                q.ask <= 0
+                or (
+                    q.ltp is not None
+                    and q.ask >
+                    10.0 * max(
+                        q.ltp,
+                        1.0
+                    )
+                )
+            )
+        ):
+            q.quote_source = "LTP_FALLBACK"
+
+        elif (
+            q.bid is not None
+            and q.ask is not None
+            and q.bid > 0
+            and q.ask >= q.bid
+        ):
+            q.quote_source = "BID_ASK"
+
+        elif (
+            q.ltp is not None
+            and q.ltp > 0
+        ):
+            q.quote_source = "LTP_FALLBACK"
+
+        # ========================================================
+        # STORE NORMAL OPTION QUOTE
+        # ========================================================
+
+        key = (
+            expiry,
+            int(round(strike)),
+            option_type,
+        )
+
+        with self.lock:
+
+            self.options[key] = q
+
+            self.quote_sequence[key] = packet_sequence
+
+            # ====================================================
+            # ATOMIC ATM CAPTURE
+            #
+            # ONLY capture the quote if this packet belongs to
+            # the ATM strike supplied by C++.
+            #
+            # We do NOT calculate ATM ourselves.
+            # ====================================================
+
+            if (
+                cpp_atm is None
+                or cpp_atm <= 0
+                or syn_fut is None
+                or syn_fut <= 0
+            ):
+                return
+
+            atm_int = int(
+                round(cpp_atm)
+            )
+
+            strike_int = int(
+                round(strike)
+            )
+
+            if strike_int != atm_int:
+                return
+
+            state = self.cpp_atm_state.get(
+                expiry
+            )
+
+            if state is None:
+                state = {
+                    "expiry": expiry,
+                    "atm": atm_int,
+                    "syn_fut": float(syn_fut),
+                    "ce": None,
+                    "pe": None,
+                    "ce_sequence": None,
+                    "pe_sequence": None,
+                    "syn_sequence": packet_sequence,
+                    "atm_sequence": packet_sequence,
+                    "updated_at": now,
+                    "complete_sequence": None,
+                }
+
+                self.cpp_atm_state[
+                    expiry
+                ] = state
+
+            # ----------------------------------------------------
+            # IMPORTANT:
+            #
+            # syn_fut + ATM strike are updated from the SAME
+            # analytics packet that produced this ATM quote.
+            # ----------------------------------------------------
+
+            state["atm"] = atm_int
+
+            state["syn_fut"] = float(
+                syn_fut
+            )
+
+            state["syn_sequence"] = (
+                packet_sequence
+            )
+
+            state["atm_sequence"] = (
+                packet_sequence
+            )
+
+            state["updated_at"] = now
+
+            if option_type == "CE":
+
+                state["ce"] = q
+
+                state["ce_sequence"] = (
+                    packet_sequence
+                )
+
+            elif option_type == "PE":
+
+                state["pe"] = q
+
+                state["pe_sequence"] = (
+                    packet_sequence
+                )
+
+            # ----------------------------------------------------
+            # COMPLETE STATE
+            #
+            # We require both ATM legs to exist.
+            #
+            # They may have arrived in separate packets, but both
+            # MUST still be fresh. The state is rebuilt using the
+            # latest C++ syn_fut/ATM and latest ATM CE/PE.
+            #
+            # The sequence numbers are retained so diagnostics can
+            # show exactly how far apart the legs were received.
+            # ----------------------------------------------------
+
+            ce = state.get("ce")
+            pe = state.get("pe")
+
+            if (
+                ce is not None
+                and pe is not None
+                and ce.ltp is not None
+                and pe.ltp is not None
+                and ce.ltp > 0
+                and pe.ltp > 0
+                and state.get("syn_fut") is not None
+                and state["syn_fut"] > 0
+            ):
+
+                self.cpp_complete_state_sequence += 1
+
+                state["complete_sequence"] = (
+                    self.cpp_complete_state_sequence
+                )
+
+                state["updated_at"] = now
+
+                # ------------------------------------------------
+                # Parity diagnostic ONLY.
+                #
+                # Never use this to replace syn_fut.
+                # ------------------------------------------------
+
+                parity_synthetic = (
+                    float(state["atm"])
+                    + float(ce.ltp)
+                    - float(pe.ltp)
+                )
+
+                parity_error = (
+                    parity_synthetic
+                    - float(state["syn_fut"])
+                )
+
+                state["parity_synthetic"] = (
+                    parity_synthetic
+                )
+
+                state["parity_error"] = (
+                    parity_error
+                )
+
+                # Print only meaningful mismatches.
+                if abs(parity_error) >= 2.0:
+
+                    print(
+                        "[CPP PARITY WARNING]",
+                        "expiry=", expiry,
+                        "atm=", state["atm"],
+                        "cpp_syn=", state["syn_fut"],
+                        "ce=", ce.ltp,
+                        "pe=", pe.ltp,
+                        "ce_pe_syn=", parity_synthetic,
+                        "diff=", parity_error,
+                        "ce_seq=", state["ce_sequence"],
+                        "pe_seq=", state["pe_sequence"],
+                        "syn_seq=", state["syn_sequence"],
+                    )
+
+    def current_simulation_snapshot(
+        self,
+        expiry=None,
+    ):
+        """
+        Return ONE coherent C++ market snapshot.
+
+        This is the ONLY market snapshot the Simulation should
+        consume for its strategy calculations.
+        """
+
+        with self.lock:
+
+            selected = (
+                expiry
+                or self.select_expiry()
+            )
+
+            if selected is None:
+                return None
+
+            state = self.cpp_atm_state.get(
+                selected
+            )
+
+            if state is None:
+                return None
+
+            syn_fut = state.get(
+                "syn_fut"
+            )
+
+            atm = state.get(
+                "atm"
+            )
+
+            ce = state.get(
+                "ce"
+            )
+
+            pe = state.get(
+                "pe"
+            )
+
+            complete_sequence = state.get(
+                "complete_sequence"
+            )
+
+            if (
+                syn_fut is None
+                or syn_fut <= 0
+                or atm is None
+                or ce is None
+                or pe is None
+                or complete_sequence is None
+            ):
+                return None
+
+            ce_ltp = finite(
+                ce.ltp
+            )
+
+            pe_ltp = finite(
+                pe.ltp
+            )
+
+            if (
+                ce_ltp is None
+                or pe_ltp is None
+                or ce_ltp <= 0
+                or pe_ltp <= 0
+            ):
+                return None
+
+            updated_at = state.get(
+                "updated_at"
+            )
+
+            if updated_at is None:
+                return None
+
+            age = (
+                now_ist() - updated_at
+            ).total_seconds()
+
+            # Do not simulate dead market state.
+            if age > 2.0:
+                return None
+
+            syn_fut = float(
+                syn_fut
+            )
+
+            atm = float(
+                atm
+            )
+
+            ce_ltp = float(
+                ce_ltp
+            )
+
+            pe_ltp = float(
+                pe_ltp
+            )
+
+            parity_synthetic = (
+                atm
+                + ce_ltp
+                - pe_ltp
+            )
+
+            parity_error = (
+                parity_synthetic
+                - syn_fut
+            )
+
+            return {
+                "expiry": selected,
+
+                # C++ authoritative synthetic.
+                "spot": syn_fut,
+                "cpp_synthetic": syn_fut,
+
+                # C++ authoritative ATM.
+                "atm": atm,
+
+                # Exact ATM quotes.
+                "ce": ce,
+                "pe": pe,
+
+                "ce_ltp": ce_ltp,
+                "pe_ltp": pe_ltp,
+
+                "straddle": (
+                    ce_ltp
+                    + pe_ltp
+                ),
+
+                # Diagnostics only.
+                "parity_synthetic":
+                    parity_synthetic,
+
+                "parity_error":
+                    parity_error,
+
+                "ce_sequence":
+                    state.get(
+                        "ce_sequence"
+                    ),
+
+                "pe_sequence":
+                    state.get(
+                        "pe_sequence"
+                    ),
+
+                "syn_sequence":
+                    state.get(
+                        "syn_sequence"
+                    ),
+
+                "complete_sequence":
+                    complete_sequence,
+
+                "receive_time":
+                    updated_at,
+            }
+
+
+
+    def snapshot(self):
+        with self.lock:
+            return {
+                "index_spot":
+                    self.index_spot,
+
+                "futures":
+                    dict(self.futures),
+
+                "future_timestamps":
+                    dict(self.future_timestamps),
+
+                "cpp_atm_state":
+                    {
+                        expiry: {
+                            k: (
+                                v
+                                if k not in ("ce", "pe")
+                                else (
+                                    v.symbol
+                                    if v is not None
+                                    else None
+                                )
+                            )
+                            for k, v in state.items()
+                        }
+                        for expiry, state
+                        in self.cpp_atm_state.items()
+                    },
+
+                "cpp_authoritative":
+                    {
+                        "syn_fut_by_expiry":
+                            dict(
+                                self.syn_fut_by_expiry
+                            ),
+
+                        "complete_state_sequence":
+                            self.cpp_complete_state_sequence,
+
+                        "feed_sequence":
+                            self.cpp_sequence,
+                    },
+
+                "synthetic_futures":
+                    dict(self.syn_fut_by_expiry),
+
+                "synthetic_timestamps":
+                    dict(self.syn_fut_timestamps),
+
+                "options":
+                    dict(self.options),
+
+                "timestamp":
+                    self.latest_timestamp,
+
+                "messages":
+                    self.last_messages,
+            }
+
+
+    def current_future(self, expiry=None):
+        with self.lock:
+
+            now = now_ist()
+            candidates = []
+
+            for exp, price in self.futures.items():
+
+                ts = self.future_timestamps.get(
+                    exp
+                )
+
+                if ts is None:
+                    continue
+
+                age = (
+                    now - ts
+                ).total_seconds()
+
+                if age > 5.0:
+                    continue
+
+                if (
+                    expiry is not None
+                    and exp != expiry
+                ):
+                    continue
+
+                dt = expiry_datetime(
+                    exp
+                )
+
+                if (
+                    dt is not None
+                    and dt >= now
+                ):
+                    candidates.append(
+                        (
+                            dt,
+                            exp,
+                            price
+                        )
+                    )
+
+            if not candidates:
+                return None
+
+            candidates.sort(
+                key=lambda x: x[0]
+            )
+
+            return candidates[0][2]
+
+
+    def current_synthetic_future(self, expiry=None):
+        with self.lock:
+
+            selected = (
+                expiry
+                or self.select_expiry()
+            )
+
+            if selected is None:
+                return None
+
+            value = (
+                self.syn_fut_by_expiry.get(
+                    selected
+                )
+            )
+
+            ts = (
+                self.syn_fut_timestamps.get(
+                    selected
+                )
+            )
+
+            if value is None or ts is None:
+                return None
+
+            age = (
+                now_ist() - ts
+            ).total_seconds()
+
+            if age > 5.0:
+                return None
+
+            if value <= 0:
+                return None
+
+            return float(value)
+
+
+    def current_spot(self, expiry=None):
+        # Strategy spot = selected expiry synthetic future.
+        return self.current_synthetic_future(
+            expiry
+        )
+
+
+    def select_expiry(self):
+
+        with self.lock:
+
+            now = now_ist()
+
+            # ====================================================
+            # EXPLICIT TARGET EXPIRY ONLY
+            #
+            # No auto-selection, no scanning, no fallback to any
+            # other expiry. TARGET_EXPIRY is set manually at the
+            # top of this file.
+            # ====================================================
+
+            target_expiry = self.target_expiry
+
+            if target_expiry is None:
+                return None
+
+            state = self.cpp_atm_state.get(
+                target_expiry
+            )
+
+            if state is None:
+                return None
+
+            syn_fut = state.get(
+                "syn_fut"
+            )
+
+            atm = state.get(
+                "atm"
+            )
+
+            ce = state.get(
+                "ce"
+            )
+
+            pe = state.get(
+                "pe"
+            )
+
+            complete_sequence = state.get(
+                "complete_sequence"
+            )
+
+            updated_at = state.get(
+                "updated_at"
+            )
+
+            if (
+                syn_fut is None
+                or syn_fut <= 0
+                or atm is None
+                or ce is None
+                or pe is None
+                or complete_sequence is None
+                or updated_at is None
+            ):
+                return None
+
+            age = (
+                now - updated_at
+            ).total_seconds()
+
+            if age > 2.0:
+                return None
+
+            if (
+                ce.ltp is None
+                or pe.ltp is None
+                or ce.ltp <= 0
+                or pe.ltp <= 0
+            ):
+                return None
+
+            return target_expiry
+
+
+    def available_expiries(self):
+        with self.lock:
+            return sorted(self.cpp_atm_state.keys())
+
+
+    def set_target_expiry(self, expiry):
+        with self.lock:
+            available = sorted(self.cpp_atm_state.keys())
+
+            if expiry not in self.cpp_atm_state:
+                return False, available
+
+            self.target_expiry = expiry
+            return True, available
+
+
+
+    def select_atm_pair(self):
+
+        with self.lock:
+
+            expiry = self.select_expiry()
+
+            if expiry is None:
+                return None
+
+            state = self.cpp_atm_state.get(
+                expiry
+            )
+
+            if state is None:
+                return None
+
+            syn_fut = state.get(
+                "syn_fut"
+            )
+
+            atm = state.get(
+                "atm"
+            )
+
+            ce = state.get(
+                "ce"
+            )
+
+            pe = state.get(
+                "pe"
+            )
+
+            if (
+                syn_fut is None
+                or syn_fut <= 0
+                or atm is None
+                or ce is None
+                or pe is None
+            ):
+                return None
+
+            if (
+                ce.ltp is None
+                or pe.ltp is None
+                or ce.ltp <= 0
+                or pe.ltp <= 0
+            ):
+                return None
+
+            return (
+                expiry,
+                int(round(atm)),
+                ce,
+                pe,
+            )
+
+
+
+
+@dataclass
+class Simulation:
+    run_id: str
+    book: MarketBook
+    lock: threading.RLock = field(default_factory=threading.RLock)
+
+    armed: bool = False
+    started: bool = False
+    completed: bool = False
+
+    start_timestamp: str | None = None
+    scheduled_start: object | None = None
+    request_timestamp: str | None = None
+    exit_timestamp: str | None = None
+
+    entry_timestamp: str | None = None
+    entry_expiry: str | None = None
+    entry_atm: float | None = None
+    entry_ce_symbol: str | None = None
+    entry_pe_symbol: str | None = None
+    entry_ce: float | None = None
+    entry_pe: float | None = None
+    entry_straddle: float | None = None
+    entry_spot: float | None = None
+    entry_future: float | None = None
+    entry_actual_future: float | None = None
+    entry_iv: float | None = None
+    entry_dte: float | None = None
+    entry_quote_source: str | None = None
+
+    current_ce: float | None = None
+    current_pe: float | None = None
+    current_straddle: float | None = None
+
+    option_pnl: float = 0.0
+    future_pnl: float = 0.0
+    total_pnl: float = 0.0
+
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+
+    hedge: float = 0.0
+    hedge_target: float = 0.0
+    points_out: float | None = None
+    points_allowed: float | None = None
+
+    exit_reason: str | None = None
+    entry_block_reason: str | None = None
+
+    last_minute_key: str | None = None
+    history: list[dict] = field(default_factory=list)
+    hedge_events: list[dict] = field(default_factory=list)
+
+    # Live market ATM reference, separate from the open position.
+    market_atm: float | None = None
+    market_ce: float | None = None
+    market_pe: float | None = None
+    market_straddle: float | None = None
+    trade_history: list[dict] = field(default_factory=list)
+
+    def _current_pair(self):
+        return self.book.select_atm_pair()
+
+    def _get_iv(self, q: Quote, spot: float, atm: float, dte: float) -> float | None:
+        if q.iv is not None and q.iv > 0:
+            return q.iv
+        if q.ltp is None or q.ltp <= 0:
+            return None
+        return implied_vol_from_price(
+            q.option_type == "CE",
+            spot,
+            atm,
+            max(dte / 365.0, 1e-6),
+            q.ltp,
+        )
+
+    def _calculate_greeks(self, spot: float, atm: float, dte: float, iv: float) -> None:
+        t = max(dte / 365.0, 1e-6)
+
+        call = bs_greeks(
+            True, spot, atm, t, RISK_FREE_RATE, iv
+        )
+        put = bs_greeks(
+            False, spot, atm, t, RISK_FREE_RATE, iv
+        )
+
+        # Short CE + short PE.
+        self.delta = -(call["delta"] + put["delta"])
+        self.gamma = -(call["gamma"] + put["gamma"])
+        self.theta = -(call["theta"] + put["theta"])
+        self.vega = -(call["vega"] + put["vega"])
+
+    def _calculate_risk(self, spot: float, iv: float) -> None:
+        if self.gamma is not None and abs(self.gamma) > 1e-12:
+            self.points_out = abs(
+                (self.delta + self.hedge) / self.gamma
+            )
+        else:
+            self.points_out = None
+
+        if self.current_straddle is not None:
+            raw_allowed = (iv / 57.0) * spot
+            cap_allowed = self.current_straddle / 4.0
+            floor_allowed = 0.0008 * spot
+            self.points_allowed = max(
+                floor_allowed,
+                min(raw_allowed, cap_allowed)
+            )
+
+    def _record_hedge(self, reason: str, old: float, new: float, spot: float) -> None:
+        if abs(new - old) < 1e-10:
+            return
+
+        self.hedge_events.append({
+            "timestamp": now_ist().isoformat(timespec="seconds"),
+            "reason": reason,
+            "old_hedge": old,
+            "new_hedge": new,
+            "change": new - old,
+            "spot": spot,
+            "delta": self.delta,
+            "gamma": self.gamma,
+            "points_out": self.points_out,
+            "points_allowed": self.points_allowed,
+        })
+        self.hedge_events = self.hedge_events[-500:]
+
+    def _rebalance(self, spot: float) -> None:
+        target = -float(self.delta or 0.0)
+
+        if self.points_out is None or self.points_allowed is None:
+            self.hedge_target = target
+            return
+
+        if self.points_out >= self.points_allowed:
+            old = self.hedge
+            self.hedge = target
+            self.hedge_target = target
+            self._record_hedge(
+                "RISK_BREACH",
+                old,
+                target,
+                spot,
+            )
+        else:
+            self.hedge_target = target
+
+
+    def _update_pnl(self, spot, future):
+        # --------------------------------------------------------
+        # OPTION P&L
+        # --------------------------------------------------------
+
+        if (
+            self.entry_straddle is None
+            or self.current_straddle is None
+        ):
+            return
+
+        self.option_pnl = (
+            self.entry_straddle
+            - self.current_straddle
+        )
+
+        # --------------------------------------------------------
+        # STRATEGY HEDGE P&L
+        #
+        # spot is the selected-expiry SYNTHETIC FUTURE.
+        #
+        # entry_future is the synthetic future captured at BUILD.
+        #
+        # The actual exchange FUT quote is NOT used for the
+        # strategy hedge P&L.
+        # --------------------------------------------------------
+
+        if self.entry_future is not None:
+
+            synthetic_move = (
+                float(spot)
+                - float(self.entry_future)
+            )
+
+            self.future_pnl = (
+                float(self.hedge)
+                * synthetic_move
+            )
+
+        else:
+            self.future_pnl = 0.0
+
+        self.total_pnl = (
+            self.option_pnl
+            + self.future_pnl
+        )
+
+    def _check_exit(self, spot: float, dte: float, otm_quote: Quote | None, iv: float) -> str | None:
+        # Existing strategy's hard stop.
+        max_loss_pts = -(
+            (self.entry_spot or spot)
+            * SL_BPS
+            / 10000.0
+        )
+
+        if self.total_pnl <= max_loss_pts:
+            return "STOP_LOSS"
+
+        # Existing TV conditions use an OTM option value.
+        otm = (
+            otm_quote.ltp
+            if otm_quote is not None
+            else None
+        )
+
+        if (
+            otm is not None
+            and 2.0 * otm < TV_THRESH * spot
+        ):
+            return "OTM_TRADE_VALUE"
+
+        if (
+            otm is not None
+            and 2.0 * otm < TV4_THRESH * spot
+        ):
+            return "OTM_REFERENCE_VALUE"
+
+        current = now_ist()
+
+        # Existing IV-drop rule.
+        if (
+            current.time() >= time(14, 57)
+            and iv < IV_DROP_THRESH
+            and dte <= 1.0
+        ):
+            return "IV_DROP"
+
+        if current.time() >= time(15, 40):
+            return "EOD"
+
+        return None
+
+    def _finish(self, reason: str) -> None:
+        if self.completed:
+            return
+
+        self.completed = True
+        self.started = bool(self.started)
+        self.armed = False
+        self.exit_reason = reason
+        self.exit_timestamp = (
+            now_ist().isoformat(
+                timespec="seconds"
+            )
+        )
+
+        self.trade_history.append({
+            "entry_timestamp": self.entry_timestamp,
+            "exit_timestamp": self.exit_timestamp,
+            "reason": reason,
+            "entry_straddle": self.entry_straddle,
+            "final_straddle": self.current_straddle,
+            "option_pnl": self.option_pnl,
+            "future_pnl": self.future_pnl,
+            "total_pnl": self.total_pnl,
+        })
+
+    def build_now(self, start_timestamp=None):
+        with self.lock:
+
+            current = now_ist()
+
+            self.armed = True
+
+            self.start_timestamp = (
+                current.isoformat(
+                    timespec="seconds"
+                )
+            )
+
+            self.scheduled_start = current
+
+            # START NOW = build immediately from the
+            # current live synthetic future and exact
+            # ATM CE + PE.
+            return self._try_enter()
+
+    def _try_enter(self, force: bool = False) -> bool:
+        pair = self._current_pair()
+
+        if pair is None:
+            self.entry_block_reason = (
+                "ATM_CE_PE_NOT_AVAILABLE"
+            )
+            return False
+
+        expiry, atm, ce, pe = pair
+        spot = self.book.current_spot()
+
+        if spot is None:
+            self.entry_block_reason = "SPOT_UNAVAILABLE"
+            return False
+
+        dte = exact_dte(expiry)
+        if dte is None or dte <= 0:
+            self.entry_block_reason = "DTE_UNAVAILABLE"
+            return False
+
+        ce_px = ce.executable_entry()
+        pe_px = pe.executable_entry()
+
+        if ce_px is None or pe_px is None:
+            self.entry_block_reason = (
+                f"QUOTES_UNAVAILABLE | "
+                f"CE={ce_px!r} PE={pe_px!r}"
+            )
+            return False
+
+        ce_iv = self._get_iv(
+            ce, spot, atm, dte
+        )
+        pe_iv = self._get_iv(
+            pe, spot, atm, dte
+        )
+
+        if ce_iv is None or pe_iv is None:
+            self.entry_block_reason = (
+                "IV_UNAVAILABLE"
+            )
+            return False
+
+        iv = 0.5 * (ce_iv + pe_iv)
+
+        self.entry_timestamp = (
+            now_ist().isoformat(timespec="seconds")
+        )
+        self.entry_expiry = expiry
+        self.entry_atm = float(atm)
+        self.entry_ce_symbol = ce.symbol
+        self.entry_pe_symbol = pe.symbol
+        self.entry_ce = float(ce_px)
+        self.entry_pe = float(pe_px)
+        self.entry_straddle = (
+            self.entry_ce
+            + self.entry_pe
+        )
+        self.entry_spot = float(spot)
+        # ----------------------------------------------------
+        # BUILD FUTURES
+        #
+        # `spot` is already the selected expiry's synthetic future.
+        #
+        # entry_future:
+        #     synthetic future used by strategy
+        #
+        # entry_actual_future:
+        #     actual exchange NIFTY FUT for reference only
+        # ----------------------------------------------------
+
+        self.entry_future = float(
+            spot
+        )
+
+        self.entry_actual_future = (
+            self.book.current_future(
+                expiry
+            )
+        )
+        self.entry_iv = float(iv)
+        self.entry_dte = float(dte)
+        self.entry_quote_source = (
+            "BID_ASK"
+            if (
+                ce.quote_source == "BID_ASK"
+                and pe.quote_source == "BID_ASK"
+            )
+            else "LTP_FALLBACK"
+        )
+
+        self.current_ce = ce.mark()
+        self.current_pe = pe.mark()
+        self.current_straddle = (
+            (self.current_ce or 0.0)
+            + (self.current_pe or 0.0)
+        )
+
+        self._calculate_greeks(
+            spot,
+            float(atm),
+            float(dte),
+            float(iv),
+        )
+
+        self.hedge = -float(self.delta or 0.0)
+        self.hedge_target = self.hedge
+
+        self._calculate_risk(
+            spot,
+            float(iv),
+        )
+
+        self.started = True
+        self.completed = False
+        self.entry_block_reason = None
+
+        self._record_minute()
+
+        return True
+
+    def _persisted_process(self, market_snapshot=None) -> None:
+
+        with self.lock:
+
+            if self.completed:
+                return
+
+            # ====================================================
+            # ENTRY
+            # ====================================================
+
+            if not self.started:
+
+                if not self.armed:
+                    return
+
+                if not self._try_enter():
+                    return
+
+                return
+
+            # ====================================================
+            # ONE ATOMIC C++ SNAPSHOT
+            #
+            # NOTHING below this point re-reads CE, PE, ATM,
+            # synthetic, or future from MarketBook.
+            # ====================================================
+
+            snapshot = market_snapshot
+
+            if snapshot is None:
+                return
+
+            # ====================================================
+            # LIVE NEAREST-WEEKLY-EXPIRY SNAPSHOT
+            #
+            # Independent from the entry-locked snapshot above.
+            # Used ONLY for the market_* reference fields.
+            # ====================================================
+
+            live_market_snapshot = snapshot
+
+            # ====================================================
+            # CURRENT MARKET ATM — ALWAYS AVAILABLE
+            #
+            # This is independent from the open position.
+            # It must be populated before entry as well.
+            # ====================================================
+
+            try:
+
+                if live_market_snapshot is None:
+                    raise ValueError(
+                        "no live market snapshot"
+                    )
+
+                _live_market_atm = float(
+                    live_market_snapshot["atm"]
+                )
+
+                _live_market_ce = float(
+                    live_market_snapshot["ce_ltp"]
+                )
+
+                _live_market_pe = float(
+                    live_market_snapshot["pe_ltp"]
+                )
+
+                self.market_atm = (
+                    _live_market_atm
+                )
+
+                self.market_ce = (
+                    _live_market_ce
+                )
+
+                self.market_pe = (
+                    _live_market_pe
+                )
+
+                self.market_straddle = (
+                    _live_market_ce
+                    +
+                    _live_market_pe
+                )
+
+            except Exception as exc:
+
+                print(
+                    "[MARKET ATM] snapshot extraction failed:",
+                    repr(exc),
+                )
+
+
+
+            expiry = snapshot["expiry"]
+
+            # ----------------------------------------------------
+            # CURRENT MARKET ATM
+            #
+            # This is the live market reference. It must NOT replace
+            # the already-open position's CE/PE legs.
+            # ----------------------------------------------------
+
+            market_atm = snapshot["atm"]
+
+            # ----------------------------------------------------
+            # AUTHORITATIVE C++ SYNTHETIC
+            # ----------------------------------------------------
+
+            spot = float(
+                snapshot["spot"]
+            )
+
+            # Current MARKET ATM pair.
+            market_ce = snapshot["ce"]
+            market_pe = snapshot["pe"]
+
+            # ----------------------------------------------------
+            # OPEN POSITION LEGS
+            #
+            # After entry, these symbols are immutable.
+            # ----------------------------------------------------
+
+            position_ce = None
+            position_pe = None
+
+            for quote in self.book.options.values():
+
+                if quote.symbol == self.entry_ce_symbol:
+                    position_ce = quote
+
+                elif quote.symbol == self.entry_pe_symbol:
+                    position_pe = quote
+
+                if (
+                    position_ce is not None
+                    and position_pe is not None
+                ):
+                    break
+
+            if (
+                position_ce is None
+                or position_pe is None
+            ):
+                return
+
+            # Freeze analytical strike at entry.
+            atm = float(
+                self.entry_atm
+            )
+
+            # Downstream IV/Greeks logic uses the OPEN position.
+            ce = position_ce
+            pe = position_pe
+
+            dte = exact_dte(
+                expiry
+            )
+
+
+            if dte is None:
+                return
+
+            # ====================================================
+            # LIVE OPTION MARKS
+            #
+            # These are from the SAME snapshot.
+            # ====================================================
+
+            # ----------------------------------------------------
+            # OPEN POSITION CURRENT MARK
+            # ----------------------------------------------------
+
+            self.current_ce = float(
+                position_ce.mark()
+            )
+
+            self.current_pe = float(
+                position_pe.mark()
+            )
+
+            self.current_straddle = (
+                self.current_ce
+                +
+                self.current_pe
+            )
+
+            # ----------------------------------------------------
+            # CURRENT MARKET ATM REFERENCE
+            # ----------------------------------------------------
+
+            if live_market_snapshot is not None:
+
+                self.market_atm = float(
+                    live_market_snapshot["atm"]
+                )
+
+                self.market_ce = float(
+                    live_market_snapshot["ce_ltp"]
+                )
+
+                self.market_pe = float(
+                    live_market_snapshot["pe_ltp"]
+                )
+
+                self.market_straddle = (
+                    self.market_ce
+                    +
+                    self.market_pe
+                )
+
+
+            # ====================================================
+            # IV
+            # ====================================================
+
+            ce_iv = self._get_iv(
+                ce,
+                spot,
+                atm,
+                dte,
+            )
+
+            pe_iv = self._get_iv(
+                pe,
+                spot,
+                atm,
+                dte,
+            )
+
+            iv_values = [
+                x
+                for x in (
+                    ce_iv,
+                    pe_iv,
+                )
+                if x is not None
+            ]
+
+            if not iv_values:
+                return
+
+            iv = (
+                sum(iv_values)
+                / len(iv_values)
+            )
+
+            # ====================================================
+            # GREEKS
+            #
+            # Same C++ synthetic + same C++ ATM.
+            # ====================================================
+
+            self._calculate_greeks(
+                spot,
+                float(atm),
+                float(dte),
+                float(iv),
+            )
+
+            # ====================================================
+            # RISK
+            #
+            # Same synthetic.
+            # ====================================================
+
+            self._calculate_risk(
+                spot,
+                float(iv),
+            )
+
+            # ====================================================
+            # HEDGE
+            #
+            # Same delta/gamma generated from the SAME snapshot.
+            #
+            # _rebalance() does not fetch market data.
+            # ====================================================
+
+            self._rebalance(
+                spot
+            )
+
+            # ====================================================
+            # HEDGE P&L
+            #
+            # The `future` argument is reference-only.
+            # Strategy P&L uses `spot`, which is C++ syn_fut.
+            # ====================================================
+
+            self._update_pnl(
+                spot,
+                self.book.current_future(
+                    expiry
+                ),
+            )
+
+            # ====================================================
+            # EXIT
+            # ====================================================
+
+            otm = (
+                pe
+                if spot > atm
+                else ce
+            )
+
+            reason = self._check_exit(
+                spot,
+                dte,
+                otm,
+                iv,
+            )
+
+            # ====================================================
+            # RECORD EXACT SNAPSHOT USED
+            # ====================================================
+
+            self._record_minute(
+                snapshot=snapshot
+            )
+
+            if reason:
+                self._finish(
+                    reason
+                )
+
+
+    def process(self, market_snapshot=None) -> None:
+        self._persisted_process(market_snapshot)
+
+        try:
+            _sim_persist(self)
+        except Exception as exc:
+            print(
+                "[SIM DB] process persist failed:",
+                repr(exc),
+            )
+
+
+    def _record_minute(
+        self,
+        snapshot=None,
+    ) -> None:
+
+        minute_key = (
+            now_ist().strftime(
+                "%Y-%m-%d %H:%M"
+            )
+        )
+
+        if (
+            minute_key
+            == self.last_minute_key
+        ):
+            return
+
+        self.last_minute_key = (
+            minute_key
+        )
+
+        if snapshot is None:
+
+            snapshot = (
+                self.book.current_simulation_snapshot(
+                    self.entry_expiry
+                )
+            )
+
+        if snapshot is not None:
+
+            spot = snapshot.get(
+                "spot"
+            )
+
+            atm = snapshot.get(
+                "atm"
+            )
+
+            receive_time = snapshot.get(
+                "receive_time"
+            )
+
+        else:
+
+            spot = None
+            atm = None
+            receive_time = None
+
+        self.history.append({
+
+            "timestamp":
+                now_ist().isoformat(
+                    timespec="seconds"
+                ),
+
+            "cpp_receive_time":
+                (
+                    receive_time.isoformat()
+                    if hasattr(
+                        receive_time,
+                        "isoformat"
+                    )
+                    else receive_time
+                ),
+
+            "spot":
+                spot,
+
+            "future":
+                self.book.current_future(
+                    self.entry_expiry
+                )
+                if self.entry_expiry
+                else self.book.current_future(),
+
+            "atm":
+                (
+                    self.market_atm
+                    if self.started
+                    else atm
+                ),
+
+            "position_atm":
+                self.entry_atm,
+
+            "market_ce":
+                self.market_ce,
+
+            "market_pe":
+                self.market_pe,
+
+            "market_straddle":
+                self.market_straddle,
+
+            "current_ce":
+
+                self.current_ce,
+
+            "current_pe":
+                self.current_pe,
+
+            "straddle":
+                self.current_straddle,
+
+            "delta":
+                self.delta,
+
+            "gamma":
+                self.gamma,
+
+            "theta":
+                self.theta,
+
+            "vega":
+                self.vega,
+
+            "hedge":
+                self.hedge,
+
+            "hedge_target":
+                self.hedge_target,
+
+            "points_out":
+                self.points_out,
+
+            "points_allowed":
+                self.points_allowed,
+
+            "option_pnl":
+                self.option_pnl,
+
+            "future_pnl":
+                self.future_pnl,
+
+            "total_pnl":
+                self.total_pnl,
+
+            "trade_active":
+                self.started
+                and not self.completed,
+
+            "quote_source":
+                self.entry_quote_source,
+
+            "cpp_sequence":
+                (
+                    snapshot.get(
+                        "complete_sequence"
+                    )
+                    if snapshot
+                    else None
+                ),
+
+            "ce_sequence":
+                (
+                    snapshot.get(
+                        "ce_sequence"
+                    )
+                    if snapshot
+                    else None
+                ),
+
+            "pe_sequence":
+                (
+                    snapshot.get(
+                        "pe_sequence"
+                    )
+                    if snapshot
+                    else None
+                ),
+
+            "syn_sequence":
+                (
+                    snapshot.get(
+                        "syn_sequence"
+                    )
+                    if snapshot
+                    else None
+                ),
+
+            "parity_error":
+                (
+                    snapshot.get(
+                        "parity_error"
+                    )
+                    if snapshot
+                    else None
+                ),
+        })
+
+        self.history = (
+            self.history[-500:]
+        )
+
+
+
+    def state(self) -> dict:
+        with self.lock:
+            spot = self.book.current_spot()
+
+            future = self.book.current_future(
+                self.entry_expiry
+                or self.book.target_expiry
+            )
+
+            pair = self.book.select_atm_pair()
+
+            live_atm = (
+                pair[1]
+                if pair is not None
+                else None
+            )
+
+            return {
+                "run_id": self.run_id,
+                "mode": "MINUTE_STRADDLE",
+                "armed": self.armed,
+                "request_timestamp":
+                    getattr(
+                        self,
+                        "request_timestamp",
+                        None,
+                    ),
+
+                "scheduled_start":
+                    (
+                        getattr(
+                            self,
+                            "scheduled_start",
+                            None,
+                        ).isoformat()
+                        if getattr(
+                            self,
+                            "scheduled_start",
+                            None,
+                        ) is not None
+                        else None
+                    ),
+                "started": self.started,
+                "completed": self.completed,
+                "start_timestamp": self.start_timestamp,
+                "exit_timestamp": self.exit_timestamp,
+
+                "market": {
+                    "spot": spot,
+                    "future": future,
+                    "atm": (
+                        self.entry_atm
+                        if self.started
+                        else live_atm
+                    ),
+                },
+
+                "entry": {
+                    "timestamp": self.entry_timestamp,
+                    "expiry": self.entry_expiry,
+                    "atm": self.entry_atm,
+                    "ce": self.entry_ce_symbol,
+                    "pe": self.entry_pe_symbol,
+                    "ce_price": self.entry_ce,
+                    "pe_price": self.entry_pe,
+                    "straddle": self.entry_straddle,
+                    "spot": self.entry_spot,
+                    "future": self.entry_future,
+                    "synthetic_future": self.entry_future,
+                    "actual_future": self.entry_actual_future,
+                    "iv": self.entry_iv,
+                    "dte": self.entry_dte,
+                    "quote_source": self.entry_quote_source,
+                },
+
+                "position": {
+                    "active": self.started and not self.completed,
+                    "current_ce": self.current_ce,
+                    "current_pe": self.current_pe,
+                    "current_straddle": self.current_straddle,
+
+                    "market_atm":
+                        self.market_atm,
+
+                    "market_ce":
+                        self.market_ce,
+
+                    "market_pe":
+                        self.market_pe,
+
+                    "market_straddle":
+                        self.market_straddle,
+
+                    "position_atm":
+                        self.entry_atm,
+                },
+
+                "greeks": {
+                    "delta": self.delta,
+                    "gamma": self.gamma,
+                    "theta": self.theta,
+                    "vega": self.vega,
+                },
+
+                "hedge": {
+                    "current": self.hedge,
+                    "target": self.hedge_target,
+                    "points_out": self.points_out,
+                    "points_allowed": self.points_allowed,
+                    "events": self.hedge_events[-100:],
+                },
+
+                "pnl": {
+                    "option": self.option_pnl,
+                    "future": self.future_pnl,
+                    "total": self.total_pnl,
+                },
+
+                "exit": {
+                    "reason": self.exit_reason,
+                    "timestamp": self.exit_timestamp,
+                },
+
+                "entry_block_reason":
+                    self.entry_block_reason,
+
+                "history":
+                    self.history[-500:],
+
+                "trade_history":
+                    self.trade_history[-50:],
+            }
+
+
+class SimulationController:
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.book = MarketBook()
+
+        self.runs: dict[str, Simulation] = {
+            run_id: Simulation(
+                run_id=run_id,
+                book=self.book,
+            )
+            for run_id in RUN_IDS
+        }
+
+        self.session_date = now_ist().date()
+
+        # NOW lifecycle
+        self.now_started = False
+        self.now_request_timestamp = None
+        self.now_scheduled_start = None
+
+        self._restore_persistent_now()
+
+    def _restore_persistent_now(self):
+
+        payload = _sim_restore(
+            "NOW"
+        )
+
+        if not payload:
+            return
+
+        try:
+
+            sim = self.runs["NOW"]
+
+            _sim_apply_restore(
+                sim,
+                payload,
+            )
+
+            if (
+                sim.started
+                or sim.armed
+                or sim.entry_ce_symbol
+            ):
+
+                self.now_started = True
+
+                self.now_request_timestamp = (
+                    getattr(
+                        sim,
+                        "request_timestamp",
+                        None,
+                    )
+                )
+
+                self.now_scheduled_start = (
+                    getattr(
+                        sim,
+                        "scheduled_start",
+                        None,
+                    )
+                )
+
+                print(
+                    "[SIM DB] RESTORED NOW",
+                    "| CE=",
+                    sim.entry_ce_symbol,
+                    "| PE=",
+                    sim.entry_pe_symbol,
+                    "| ATM=",
+                    sim.entry_atm,
+                )
+
+        except Exception as exc:
+
+            print(
+                "[SIM DB] NOW restore failed:",
+                repr(exc),
+            )
+
+
+
+    def _fixed_run_should_start(self, run_id: str) -> bool:
+        """
+        Fixed simulations arm ONLY during their exact scheduled
+        minute - not "at or after" it.
+
+        Example:
+            09:16 run -> arms only during 09:16:00-09:16:59
+            09:17 run -> arms only during 09:17:00-09:17:59
+            09:18 run -> arms only during 09:18:00-09:18:59
+            09:19 run -> arms only during 09:19:00-09:19:59
+
+        If the server was down, the expiry wasn't yet selected,
+        or the process simply wasn't ticking during that exact
+        minute, the run permanently misses it for the day and
+        does NOT backfill later - matching the documented intent
+        that was previously not actually enforced by this method
+        (it only checked now >= start, with no upper bound, so a
+        run could incorrectly arm hours late).
+
+        Each Simulation.armed flag guarantees the run is started
+        only once for the trading day, for the runs that do
+        catch their window.
+        """
+
+        start = FIXED_STARTS[run_id]
+        now = now_ist().time()
+
+        start_seconds = (
+            start.hour * 3600
+            + start.minute * 60
+        )
+
+        now_seconds = (
+            now.hour * 3600
+            + now.minute * 60
+            + now.second
+        )
+
+        return (
+            start_seconds
+            <= now_seconds
+            < start_seconds + 60
+        )
+
+
+    def process_tick(self, tick: dict) -> None:
+
+        with self.lock:
+
+            now = now_ist()
+            today = now.date()
+
+            # ----------------------------------------------------
+            # NEW TRADING DAY
+            #
+            # Reset all five simulation lanes so tomorrow's
+            # 09:16/09:17/09:18/09:19 runs start cleanly.
+            # ----------------------------------------------------
+            if today != self.session_date:
+
+                self.session_date = today
+
+                self.runs = {
+                    run_id: Simulation(
+                        run_id=run_id,
+                        book=self.book,
+                    )
+                    for run_id in RUN_IDS
+                }
+
+                self.now_started = False
+                self.now_request_timestamp = None
+                self.now_scheduled_start = None
+
+            # ----------------------------------------------------
+            # Always ingest the market first.
+            # ----------------------------------------------------
+            self.book.update(tick)
+
+            current = now_ist()
+
+            for run_id, sim in self.runs.items():
+
+                # A completed simulation stays completed for the
+                # remainder of this trading day.
+                if sim.completed:
+                    continue
+
+                # No simulation may arm/build until an expiry has
+                # been explicitly selected via /api/select_expiry.
+                if self.book.target_expiry is None:
+                    continue
+
+                # ------------------------------------------------
+                # FIXED 09:16 / 09:17 / 09:18 / 09:19
+                #
+                # Only start during the exact minute.
+                # Missed minute => no backfill.
+                # ------------------------------------------------
+                if run_id != "NOW":
+
+                    if not self._fixed_run_should_start(
+                        run_id
+                    ):
+                        continue
+
+                    if not sim.armed:
+
+                        sim.armed = True
+
+                        sim.start_timestamp = (
+                            current.isoformat(
+                                timespec="seconds"
+                            )
+                        )
+
+                    market_snapshot = None
+
+                    if sim.started:
+                        market_snapshot = (
+                            self.book.current_simulation_snapshot(
+                                sim.entry_expiry
+                            )
+                        )
+
+                        if market_snapshot is None:
+                            continue
+
+                    sim.process(
+                        market_snapshot
+                    )
+
+                    continue
+
+                # ------------------------------------------------
+                # NOW
+                #
+                # The button only ARMS the simulation.
+                #
+                # It does NOT build immediately.
+                #
+                # Build occurs on the first live tick at or after
+                # the next full minute.
+                # ------------------------------------------------
+                if not self.now_started:
+                    continue
+
+                scheduled = (
+                    self.now_scheduled_start
+                )
+
+                if scheduled is None:
+                    continue
+
+                if current < scheduled:
+                    continue
+
+                # Scheduled minute has arrived.
+                if not sim.armed:
+
+                    sim.armed = True
+
+                    # This is the actual simulation start time,
+                    # while request_timestamp preserves the time
+                    # at which the user clicked START NOW.
+                    sim.start_timestamp = (
+                        current.isoformat(
+                            timespec="seconds"
+                        )
+                    )
+
+                market_snapshot = None
+
+                if sim.started:
+                    market_snapshot = (
+                        self.book.current_simulation_snapshot(
+                            sim.entry_expiry
+                        )
+                    )
+
+                    if market_snapshot is None:
+                        continue
+
+                sim.process(
+                    market_snapshot
+                )
+
+
+    def start_now(self) -> dict:
+
+        with self.lock:
+
+            if self.book.target_expiry is None:
+                return {
+                    "run_id": "NOW",
+                    "error": "NO_EXPIRY_SELECTED",
+                }
+
+            current = now_ist()
+
+            existing = self.runs.get(
+                "NOW"
+            )
+
+            # ----------------------------------------------------
+            # NOW IS ONE-SHOT PER SERVER SESSION.
+            #
+            # Once START NOW has been pressed, this remains
+            # consumed even after the trade completes.
+            #
+            # A server restart creates a fresh controller and
+            # resets now_started=False.
+            # ----------------------------------------------------
+            if self.now_started:
+
+                if existing is not None:
+                    return existing.state()
+
+                return {
+                    "run_id": "NOW",
+                    "error": "NOW simulation already consumed",
+                }
+
+            # ----------------------------------------------------
+            # Fresh NOW lane.
+            # ----------------------------------------------------
+            sim = Simulation(
+                run_id="NOW",
+                book=self.book,
+            )
+
+            self.runs["NOW"] = sim
+
+            self.now_started = True
+
+            # Exact user click timestamp.
+            request_timestamp = (
+                current.isoformat(
+                    timespec="seconds"
+                )
+            )
+
+            # Next full minute.
+            scheduled = (
+                current.replace(
+                    second=0,
+                    microsecond=0,
+                )
+                + timedelta(minutes=1)
+            )
+
+            self.now_request_timestamp = (
+                request_timestamp
+            )
+
+            self.now_scheduled_start = (
+                scheduled
+            )
+
+            sim.request_timestamp = (
+                request_timestamp
+            )
+
+            sim.scheduled_start = (
+                scheduled
+            )
+
+            # DO NOT ARM.
+            # DO NOT BUILD.
+            #
+            # process_tick() will do that exactly when the
+            # scheduled minute begins.
+            sim.armed = False
+
+            return sim.state()
+
+
+    def clear_run(self, run_id: str) -> dict:
+        with self.lock:
+
+            if run_id not in self.runs:
+                return {
+                    "status": "ERROR",
+                    "error": "Unknown simulation run",
+                    "run_id": run_id,
+                }
+
+            try:
+                conn = _sim_db_connect()
+                try:
+                    conn.execute(
+                        "DELETE FROM simulation_state "
+                        "WHERE run_id=? AND trade_date=?",
+                        (
+                            run_id,
+                            now_ist().date().isoformat(),
+                        ),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception as exc:
+                print(
+                    "[SIM DB] clear_run failed:",
+                    repr(exc),
+                )
+
+            self.runs[run_id] = Simulation(
+                run_id=run_id,
+                book=self.book,
+            )
+
+            if run_id == "NOW":
+                self.now_started = False
+                self.now_request_timestamp = None
+                self.now_scheduled_start = None
+
+            return {
+                "status": "SUCCESS",
+                "run_id": run_id,
+                "cleared": True,
+            }
+
+
+    def state(self, run_id: str | None = None) -> Any:
+        with self.lock:
+            if run_id:
+                sim = self.runs.get(run_id)
+                return sim.state() if sim else None
+            return {
+                run_id:
+                    sim.state()
+                for run_id, sim in self.runs.items()
+            }
+
+
+CONTROLLER = SimulationController()
+
+
+async def ws_loop():
+    while True:
+        try:
+            print(f"[WS] Connecting to {WS_URI} ...")
+            async with websockets.connect(
+                WS_URI,
+                ping_interval=None,
+                ping_timeout=None,
+                max_size=64 * 1024 * 1024,
+            ) as ws:
+                print("[WS] Connected to C++ feed :9001")
+
+                try:
+                    await ws.send(
+                        json.dumps({
+                            "action": "subscribe",
+                            "channel": "ticks",
+                        })
+                    )
+                except Exception:
+                    pass
+
+                async for raw in ws:
+                    try:
+                        if isinstance(raw, bytes):
+                            raw = raw.decode(
+                                "utf-8",
+                                errors="replace",
+                            )
+
+                        payload = json.loads(raw)
+
+                        if isinstance(payload, list):
+                            records = payload
+                        elif isinstance(payload, dict):
+                            data = payload.get("data")
+                            records = (
+                                data
+                                if isinstance(data, list)
+                                else [payload]
+                            )
+                        else:
+                            continue
+
+                        for record in records:
+                            if isinstance(record, dict):
+                                CONTROLLER.process_tick(record)
+
+                    except Exception as exc:
+                        print(
+                            "[WS RECORD ERROR]",
+                            repr(exc),
+                        )
+
+        except Exception as exc:
+            print("[WS ERROR]", repr(exc))
+            await asyncio.sleep(2)
+
+
+def fmt_num(value: Any, digits: int = 2) -> str:
+    x = finite(value)
+    return "—" if x is None else f"{x:.{digits}f}"
+
+
+DASHBOARD_HTML = r"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>NIFTY Minute Simulations</title>
+<style>
+:root {
+    font-family: Inter, system-ui, sans-serif;
+    color-scheme: dark;
+}
+body {
+    margin: 0;
+    background: #0b1020;
+    color: #e9eef8;
+}
+header {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: #11192b;
+    border-bottom: 1px solid #283550;
+    padding: 16px 22px;
+}
+h1 {
+    margin: 0 0 14px;
+    font-size: 21px;
+}
+.tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+button {
+    border: 1px solid #3a4969;
+    background: #18233b;
+    color: #dfe7f5;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 700;
+    cursor: pointer;
+}
+button.active {
+    background: #315da8;
+    border-color: #4b7bc7;
+}
+button.now {
+    background: #1e7a52;
+    border-color: #2da46d;
+}
+main {
+    padding: 18px 22px 40px;
+}
+.status {
+    color: #9eabc4;
+    margin-bottom: 12px;
+}
+.cards {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(150px, 1fr));
+    gap: 12px;
+}
+.card, .panel {
+    background: #121a2d;
+    border: 1px solid #283550;
+    border-radius: 10px;
+    padding: 14px;
+}
+.panel {
+    margin-top: 14px;
+}
+.label {
+    color: #8fa0bd;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+.value {
+    font-size: 20px;
+    font-weight: 750;
+    margin-top: 5px;
+}
+.small {
+    font-size: 12px;
+    color: #9eabc4;
+}
+.grid4 {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+}
+canvas {
+    width: 100%;
+    height: 280px;
+    background: #0d1425;
+    border-radius: 8px;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+th, td {
+    padding: 7px;
+    border-bottom: 1px solid #283550;
+    text-align: right;
+}
+th:first-child, td:first-child {
+    text-align: left;
+}
+.reason {
+    margin-top: 10px;
+    color: #f4bf73;
+}
+@media (max-width: 900px) {
+    .cards, .grid4 {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+</style>
+
+<style id="professionalSimulationUI">
+:root{
+  --sim-bg:#07101c;
+  --sim-panel:#0d1827;
+  --sim-panel-2:#101f31;
+  --sim-border:#20344a;
+  --sim-text:#e8f0f8;
+  --sim-muted:#8ea2b8;
+  --sim-green:#35d07f;
+  --sim-red:#ff6176;
+  --sim-yellow:#f7c95f;
+  --sim-blue:#55aaff;
+  --sim-shadow:0 14px 40px rgba(0,0,0,.22);
+}
+
+#proSimRoot{
+  width:100%;
+  margin:18px 0 30px;
+  color:var(--sim-text);
+  font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+
+.pro-sim-shell{
+  background:linear-gradient(145deg,#091321,#0b1624 55%,#0e1b2b);
+  border:1px solid var(--sim-border);
+  border-radius:18px;
+  box-shadow:var(--sim-shadow);
+  overflow:hidden;
+}
+
+.pro-sim-top{
+  padding:18px 20px 10px;
+  border-bottom:1px solid var(--sim-border);
+}
+
+.pro-sim-title-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:15px;
+  flex-wrap:wrap;
+}
+
+.pro-sim-title{
+  font-size:21px;
+  font-weight:700;
+  letter-spacing:.2px;
+}
+
+.pro-sim-sub{
+  color:var(--sim-muted);
+  font-size:12px;
+  margin-top:4px;
+}
+
+.pro-sim-live{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  color:var(--sim-green);
+  font-size:12px;
+  font-weight:700;
+}
+
+.pro-sim-live-dot{
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:var(--sim-green);
+  box-shadow:0 0 12px var(--sim-green);
+}
+
+.pro-sim-tabs{
+  display:flex;
+  gap:7px;
+  margin-top:16px;
+  flex-wrap:wrap;
+}
+
+.pro-sim-tab{
+  border:1px solid var(--sim-border);
+  background:#0b1522;
+  color:#b7c7d9;
+  border-radius:10px;
+  padding:9px 16px;
+  font-weight:700;
+  cursor:pointer;
+  transition:.15s ease;
+}
+
+.pro-sim-tab:hover{
+  border-color:#37516d;
+}
+
+.pro-sim-tab.active{
+  background:#15304a;
+  border-color:var(--sim-blue);
+  color:#fff;
+}
+
+.pro-sim-now{
+  margin-left:auto;
+  background:#17472f;
+  border-color:#2f9b64;
+  color:#eafff3;
+}
+
+.pro-sim-now:hover{
+  background:#1c5a3b;
+}
+
+.pro-sim-status{
+  display:flex;
+  gap:10px;
+  margin-top:10px;
+  flex-wrap:wrap;
+}
+
+.pro-pill{
+  background:#0a1420;
+  border:1px solid var(--sim-border);
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:11px;
+  color:var(--sim-muted);
+}
+
+.pro-grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:12px;
+  padding:14px 18px;
+}
+
+.pro-card{
+  background:rgba(13,24,39,.96);
+  border:1px solid var(--sim-border);
+  border-radius:14px;
+  padding:14px;
+}
+
+.pro-card-label{
+  font-size:11px;
+  color:var(--sim-muted);
+  text-transform:uppercase;
+  letter-spacing:.7px;
+}
+
+.pro-card-value{
+  font-size:22px;
+  font-weight:750;
+  margin-top:7px;
+}
+
+.pro-card-small{
+  margin-top:4px;
+  font-size:11px;
+  color:var(--sim-muted);
+}
+
+.pro-two{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+  padding:0 18px 12px;
+}
+
+.pro-section{
+  background:rgba(13,24,39,.96);
+  border:1px solid var(--sim-border);
+  border-radius:14px;
+  overflow:hidden;
+}
+
+.pro-section-head{
+  padding:12px 14px;
+  border-bottom:1px solid var(--sim-border);
+  font-size:12px;
+  font-weight:750;
+  letter-spacing:.5px;
+  text-transform:uppercase;
+}
+
+.pro-section-body{
+  padding:14px;
+}
+
+.pro-leg-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr 1fr;
+  gap:10px;
+}
+
+.pro-leg{
+  padding:11px;
+  border-radius:10px;
+  background:#0a1420;
+  border:1px solid #192b3e;
+}
+
+.pro-leg-name{
+  color:var(--sim-muted);
+  font-size:10px;
+  text-transform:uppercase;
+}
+
+.pro-leg-value{
+  font-size:18px;
+  font-weight:700;
+  margin-top:4px;
+}
+
+.pro-pnl-grid{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:10px;
+}
+
+.pro-pnl{
+  padding:12px;
+  border-radius:10px;
+  background:#0a1420;
+  border:1px solid #192b3e;
+}
+
+.pro-pnl-value{
+  font-size:20px;
+  font-weight:800;
+  margin-top:5px;
+}
+
+.pro-positive{
+  color:var(--sim-green);
+}
+
+.pro-negative{
+  color:var(--sim-red);
+}
+
+.pro-neutral{
+  color:#fff;
+}
+
+.pro-greeks{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:10px;
+}
+
+.pro-greek{
+  background:#0a1420;
+  border:1px solid #192b3e;
+  border-radius:10px;
+  padding:11px;
+}
+
+.pro-greek-name{
+  font-size:10px;
+  color:var(--sim-muted);
+  text-transform:uppercase;
+}
+
+.pro-greek-value{
+  margin-top:5px;
+  font-size:17px;
+  font-weight:700;
+}
+
+.pro-chart-wrap{
+  padding:14px 18px;
+}
+
+.pro-chart-card{
+  background:rgba(13,24,39,.96);
+  border:1px solid var(--sim-border);
+  border-radius:14px;
+  padding:14px;
+}
+
+.pro-chart{
+  width:100%;
+  height:240px;
+  display:block;
+  background:#08111d;
+  border-radius:10px;
+}
+
+.pro-table-wrap{
+  padding:0 18px 18px;
+}
+
+.pro-table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:11px;
+}
+
+.pro-table th{
+  text-align:left;
+  color:var(--sim-muted);
+  font-weight:650;
+  padding:9px 8px;
+  border-bottom:1px solid var(--sim-border);
+}
+
+.pro-table td{
+  padding:9px 8px;
+  border-bottom:1px solid #142536;
+}
+
+.pro-empty{
+  color:var(--sim-muted);
+  text-align:center;
+  padding:25px;
+}
+
+@media(max-width:1000px){
+  .pro-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+
+  .pro-two{
+    grid-template-columns:1fr;
+  }
+}
+
+@media(max-width:650px){
+  .pro-grid,
+  .pro-pnl-grid,
+  .pro-greeks{
+    grid-template-columns:1fr 1fr;
+  }
+}
+</style>
+
+
+<style id="compactFinalUI">
+#proChart,
+.pro-chart-wrap{
+  display:none !important;
+}
+
+#proSimRoot{
+  margin:6px 0 10px;
+}
+
+.pro-sim-top{
+  padding:8px 10px 6px;
+}
+
+.pro-sim-title{
+  font-size:15px;
+}
+
+.pro-sim-sub{
+  font-size:9px;
+}
+
+.pro-sim-tabs{
+  margin-top:7px;
+  gap:4px;
+  flex-wrap:nowrap;
+}
+
+.pro-sim-tab{
+  flex:1 1 0;
+  padding:6px 7px;
+  font-size:10px;
+  border-radius:7px;
+}
+
+.pro-sim-now{
+  flex:1.2 1 0;
+  margin-left:0;
+}
+
+.pro-sim-status{
+  margin-top:5px;
+  gap:4px;
+}
+
+.pro-pill{
+  padding:3px 6px;
+  font-size:9px;
+}
+
+.pro-grid{
+  gap:6px;
+  padding:6px 8px;
+}
+
+.pro-card{
+  padding:7px 8px;
+  border-radius:8px;
+}
+
+.pro-card-label{
+  font-size:8px;
+}
+
+.pro-card-value{
+  font-size:16px;
+  margin-top:3px;
+}
+
+.pro-card-small{
+  font-size:8px;
+}
+
+.pro-two{
+  gap:6px;
+  padding:0 8px 6px;
+}
+
+.pro-section{
+  border-radius:8px;
+}
+
+.pro-section-head{
+  padding:6px 8px;
+  font-size:9px;
+}
+
+.pro-section-body{
+  padding:7px;
+}
+
+.pro-leg-grid{
+  gap:5px;
+}
+
+.pro-leg{
+  padding:6px 7px;
+  border-radius:6px;
+}
+
+.pro-leg-name{
+  font-size:8px;
+}
+
+.pro-leg-value{
+  font-size:12px;
+}
+
+.pro-pnl-grid{
+  gap:5px;
+}
+
+.pro-pnl{
+  padding:7px;
+}
+
+.pro-pnl-value{
+  font-size:15px;
+}
+
+.pro-greeks{
+  gap:5px;
+}
+
+.pro-greek{
+  padding:6px 7px;
+}
+
+.pro-greek-name{
+  font-size:8px;
+}
+
+.pro-greek-value{
+  font-size:12px;
+}
+
+.pro-table-wrap{
+  padding:0 8px 6px;
+}
+
+.pro-table{
+  font-size:9px;
+}
+
+.pro-table th,
+.pro-table td{
+  padding:5px;
+  white-space:nowrap;
+}
+
+@media(max-width:800px){
+  .pro-sim-tabs{
+    overflow-x:auto;
+  }
+
+  .pro-sim-tab{
+    flex:0 0 auto;
+  }
+
+  .pro-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+
+  .pro-two{
+    grid-template-columns:1fr;
+  }
+}
+</style>
+
+
+<style id="finalSimulationUI">
+
+/* ============================================================
+   THE COMPACT UI IS THE ONLY VISIBLE SIMULATION UI.
+   ============================================================ */
+
+/* Old five-stage navigation/panel */
+#fiveSimulationRunTabs,
+#fiveRunLabel,
+#fiveSimulationRunJs,
+#fiveStageSimulation,
+.five-run-tabs {
+    display:none !important;
+}
+
+/* Remove the chart completely */
+#proChart,
+.pro-chart-wrap,
+.pro-chart-card {
+    display:none !important;
+}
+
+/* Compact header */
+#proSimRoot {
+    margin:4px 0 8px !important;
+}
+
+#proSimRoot .pro-sim-shell {
+    border-radius:8px !important;
+}
+
+/* Small run tabs */
+#proSimRoot .pro-sim-top {
+    padding:5px 7px !important;
+}
+
+#proSimRoot .pro-sim-title {
+    font-size:13px !important;
+}
+
+#proSimRoot .pro-sim-sub {
+    display:none !important;
+}
+
+#proSimRoot .pro-sim-tabs {
+    margin-top:4px !important;
+    gap:3px !important;
+}
+
+#proSimRoot .pro-sim-tab {
+    padding:5px 9px !important;
+    min-height:26px !important;
+    font-size:9px !important;
+    border-radius:5px !important;
+}
+
+#proSimRoot .pro-sim-status {
+    display:none !important;
+}
+
+/* Very small market strip */
+#proSimRoot .pro-grid {
+    padding:5px 6px !important;
+    gap:4px !important;
+}
+
+#proSimRoot .pro-card {
+    padding:5px 6px !important;
+    border-radius:6px !important;
+}
+
+#proSimRoot .pro-card-label {
+    font-size:7px !important;
+}
+
+#proSimRoot .pro-card-value {
+    font-size:13px !important;
+    margin-top:2px !important;
+}
+
+#proSimRoot .pro-card-small {
+    display:none !important;
+}
+
+/* Compact sections */
+#proSimRoot .pro-two {
+    gap:4px !important;
+    padding:0 6px 4px !important;
+}
+
+#proSimRoot .pro-section-head {
+    padding:5px 7px !important;
+    font-size:8px !important;
+}
+
+#proSimRoot .pro-section-body {
+    padding:5px !important;
+}
+
+#proSimRoot .pro-leg-grid,
+#proSimRoot .pro-pnl-grid,
+#proSimRoot .pro-greeks {
+    gap:4px !important;
+}
+
+#proSimRoot .pro-leg {
+    padding:4px 5px !important;
+}
+
+#proSimRoot .pro-leg-name,
+#proSimRoot .pro-greek-name,
+#proSimRoot .pro-card-label {
+    font-size:7px !important;
+}
+
+#proSimRoot .pro-leg-value,
+#proSimRoot .pro-greek-value {
+    font-size:10px !important;
+}
+
+#proSimRoot .pro-pnl {
+    padding:5px !important;
+}
+
+#proSimRoot .pro-pnl-value {
+    font-size:13px !important;
+}
+
+/* Tables */
+#proSimRoot .pro-table-wrap {
+    padding:0 6px 4px !important;
+}
+
+#proSimRoot .pro-table {
+    font-size:8px !important;
+}
+
+#proSimRoot .pro-table th,
+#proSimRoot .pro-table td {
+    padding:4px 5px !important;
+}
+
+</style>
+
+
+<style id="finalLegacyUIRemoval">
+
+/*
+ * The original simulator UI is the first header/main pair.
+ * The professional simulator is #proSimRoot and remains visible.
+ */
+body > header,
+body > main {
+    display: none !important;
+}
+
+/*
+ * The original chart and its parent are also explicitly hidden.
+ */
+body #pnlChart {
+    display: none !important;
+}
+
+/*
+ * Make sure the professional simulator starts at the top.
+ */
+#proSimRoot {
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/*
+ * Remove unnecessary title/subtitle/status vertical space.
+ */
+#proSimRoot .pro-sim-title {
+    font-size: 13px !important;
+}
+
+#proSimRoot .pro-sim-sub {
+    display: none !important;
+}
+
+#proSimRoot .pro-sim-status {
+    display: none !important;
+}
+
+/*
+ * Compact tabs.
+ */
+#proSimRoot .pro-sim-tabs {
+    display: flex !important;
+    width: 100% !important;
+    gap: 4px !important;
+    margin-top: 4px !important;
+}
+
+#proSimRoot .pro-sim-tab {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    padding: 6px 9px !important;
+    font-size: 10px !important;
+}
+
+/*
+ * Market strip.
+ */
+#proSimRoot .pro-grid {
+    padding: 5px 7px !important;
+    gap: 5px !important;
+}
+
+#proSimRoot .pro-card {
+    padding: 6px 8px !important;
+}
+
+#proSimRoot .pro-card-label {
+    font-size: 8px !important;
+}
+
+#proSimRoot .pro-card-value {
+    font-size: 15px !important;
+}
+
+/*
+ * Summary sections.
+ */
+#proSimRoot .pro-two {
+    gap: 5px !important;
+    padding: 0 7px 5px !important;
+}
+
+#proSimRoot .pro-section-head {
+    padding: 6px 8px !important;
+    font-size: 9px !important;
+}
+
+#proSimRoot .pro-section-body {
+    padding: 6px !important;
+}
+
+#proSimRoot .pro-leg {
+    padding: 5px 6px !important;
+}
+
+#proSimRoot .pro-leg-value {
+    font-size: 11px !important;
+}
+
+#proSimRoot .pro-pnl {
+    padding: 6px !important;
+}
+
+#proSimRoot .pro-pnl-value {
+    font-size: 14px !important;
+}
+
+#proSimRoot .pro-greek {
+    padding: 5px 6px !important;
+}
+
+#proSimRoot .pro-greek-value {
+    font-size: 12px !important;
+}
+
+
+/*
+ * Tables.
+ */
+#proSimRoot .pro-table-wrap {
+    padding: 0 7px 6px !important;
+}
+
+#proSimRoot .pro-table {
+    font-size: 8px !important;
+}
+
+#proSimRoot .pro-table th,
+#proSimRoot .pro-table td {
+    padding: 4px 5px !important;
+}
+
+</style>
+
+
+<style id="finalPnlChartUI">
+
+#proPnlHistoryChartSection {
+    margin: 0 7px 6px;
+    background: rgba(13,24,39,.96);
+    border: 1px solid #20344a;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+#proPnlHistoryChartSection .pro-chart-title {
+    padding: 6px 8px;
+    font-size: 9px;
+    font-weight: 750;
+    text-transform: uppercase;
+    border-bottom: 1px solid #20344a;
+}
+
+#proPnlHistoryCanvasWrap {
+    padding: 5px 6px;
+    height: 150px;
+}
+
+#proPnlHistoryCanvas {
+    width: 100%;
+    height: 140px;
+    display: block;
+    background: #08111d;
+    border-radius: 5px;
+}
+
+</style>
+
+
+
+<style id="finalSummarySpacing">
+
+/* Summary order:
+   Hedge Events
+   Entry / Current + P&L
+   Greeks + Hedge/Risk
+   P&L History
+   1-MINUTE HISTORY
+*/
+
+#proSimRoot #proPnlHistoryChartSection{
+    clear:both;
+}
+
+</style>
+
+
+<style id="perRunAutoDashboardCSS">
+
+/* ============================================================
+   PAGE WIDTH / DENSITY
+   ============================================================ */
+
+#proSimRoot{
+    width:100%;
+    max-width:none;
+    margin:0 !important;
+    padding:0 !important;
+}
+
+#proSimRoot .pro-sim-shell{
+    width:100%;
+    max-width:none;
+    border-radius:8px;
+}
+
+/* ------------------------------------------------------------
+   Header + tabs
+   ------------------------------------------------------------ */
+
+#proSimRoot .pro-sim-top{
+    padding:6px 9px 5px !important;
+}
+
+#proSimRoot .pro-sim-title{
+    font-size:14px !important;
+    line-height:1.1;
+}
+
+#proSimRoot .pro-sim-sub{
+    display:none !important;
+}
+
+#proSimRoot .pro-sim-tabs{
+    display:grid !important;
+    grid-template-columns:
+        repeat(4,minmax(0,1fr))
+        minmax(130px,1.25fr);
+    gap:4px !important;
+    margin-top:5px !important;
+    width:100%;
+}
+
+#proSimRoot .pro-sim-tab{
+    min-width:0 !important;
+    padding:7px 9px !important;
+    min-height:28px !important;
+    font-size:10px !important;
+    border-radius:6px !important;
+}
+
+#proSimRoot .pro-sim-now{
+    margin-left:0 !important;
+}
+
+/* Compact live/request status */
+#proSimRoot .pro-sim-status{
+    display:flex !important;
+    margin-top:4px !important;
+    gap:4px !important;
+}
+
+#proSimRoot .pro-pill{
+    padding:3px 7px !important;
+    font-size:8px !important;
+}
+
+/* ------------------------------------------------------------
+   Market summary
+   ------------------------------------------------------------ */
+
+#proSimRoot .pro-grid{
+    display:grid !important;
+    grid-template-columns:
+        repeat(4,minmax(0,1fr));
+    gap:5px !important;
+    padding:6px !important;
+}
+
+#proSimRoot .pro-card{
+    padding:7px 8px !important;
+    min-width:0;
+    border-radius:7px !important;
+}
+
+#proSimRoot .pro-card-label{
+    font-size:7px !important;
+    letter-spacing:.35px;
+}
+
+#proSimRoot .pro-card-value{
+    font-size:16px !important;
+    line-height:1.1;
+    margin-top:3px !important;
+}
+
+#proSimRoot .pro-card-small{
+    font-size:8px !important;
+    margin-top:2px;
+}
+
+/* ------------------------------------------------------------
+   Main summary rows
+   ------------------------------------------------------------ */
+
+#proSimRoot .pro-two{
+    display:grid !important;
+    grid-template-columns:
+        minmax(0,1fr)
+        minmax(0,1fr);
+    gap:5px !important;
+    padding:0 6px 5px !important;
+}
+
+#proSimRoot .pro-section{
+    border-radius:7px !important;
+}
+
+#proSimRoot .pro-section-head{
+    padding:6px 8px !important;
+    font-size:8px !important;
+    letter-spacing:.45px;
+}
+
+#proSimRoot .pro-section-body{
+    padding:6px !important;
+}
+
+#proSimRoot .pro-leg-grid{
+    gap:4px !important;
+}
+
+#proSimRoot .pro-leg{
+    padding:5px 6px !important;
+    min-width:0;
+}
+
+#proSimRoot .pro-leg-name{
+    font-size:7px !important;
+}
+
+#proSimRoot .pro-leg-value{
+    font-size:11px !important;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+#proSimRoot .pro-pnl-grid{
+    gap:4px !important;
+}
+
+#proSimRoot .pro-pnl{
+    padding:6px !important;
+}
+
+#proSimRoot .pro-pnl-value{
+    font-size:14px !important;
+}
+
+/* ------------------------------------------------------------
+   Greeks / Risk
+   ------------------------------------------------------------ */
+
+#proSimRoot .pro-greeks{
+    gap:4px !important;
+}
+
+#proSimRoot .pro-greek{
+    padding:5px 6px !important;
+}
+
+#proSimRoot .pro-greek-name{
+    font-size:7px !important;
+}
+
+#proSimRoot .pro-greek-value{
+    font-size:11px !important;
+}
+
+/* ------------------------------------------------------------
+   Tables
+   ------------------------------------------------------------ */
+
+#proSimRoot .pro-table-wrap{
+    width:auto;
+    padding:0 6px 5px !important;
+}
+
+#proSimRoot .pro-table{
+    width:100%;
+    font-size:8px !important;
+}
+
+#proSimRoot .pro-table th,
+#proSimRoot .pro-table td{
+    padding:4px 5px !important;
+    white-space:nowrap;
+}
+
+/* ------------------------------------------------------------
+   P&L HISTORY · 1-MINUTE SNAPSHOTS CHART
+   ------------------------------------------------------------ */
+
+#autoPnlChartSection{
+    margin:0 6px 5px;
+    border:1px solid #20344a;
+    border-radius:7px;
+    background:#0d1827;
+    overflow:hidden;
+}
+
+#autoPnlChartHeader{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:6px 8px;
+    border-bottom:1px solid #20344a;
+}
+
+#autoPnlChartTitle{
+    font-size:8px;
+    font-weight:750;
+    letter-spacing:.5px;
+}
+
+#autoPnlChartStatus{
+    font-size:8px;
+    color:#8ea2b8;
+}
+
+#autoPnlChartWrap{
+    height:185px;
+    padding:5px 7px 7px;
+}
+
+#autoPnlChart{
+    width:100%;
+    height:175px;
+    display:block;
+    background:#08111d;
+    border-radius:5px;
+}
+
+/* ------------------------------------------------------------
+   Blank historical runs
+   ------------------------------------------------------------ */
+
+#autoPnlChartSection.blank-history
+#autoPnlChart{
+    opacity:.55;
+}
+
+/* ------------------------------------------------------------
+   NOW button states
+   ------------------------------------------------------------ */
+
+#proSimRoot .pro-sim-now[data-now-state="scheduled"]{
+    background:#684f18 !important;
+    border-color:#9a7624 !important;
+}
+
+#proSimRoot .pro-sim-now[data-now-state="running"]{
+    background:#173f2c !important;
+    border-color:#35d07f !important;
+}
+
+#proSimRoot .pro-sim-now[data-now-state="completed"]{
+    background:#193052 !important;
+    border-color:#4c86c4 !important;
+}
+
+#proSimRoot .pro-sim-now:disabled{
+    cursor:not-allowed;
+    opacity:.92;
+}
+
+/* ------------------------------------------------------------
+   Responsive
+   ------------------------------------------------------------ */
+
+@media(max-width:850px){
+
+    #proSimRoot .pro-sim-tabs{
+        grid-template-columns:
+            repeat(4,minmax(75px,1fr))
+            minmax(110px,1fr);
+        overflow-x:auto;
+    }
+
+    #proSimRoot .pro-two{
+        grid-template-columns:1fr;
+    }
+
+    #proSimRoot .pro-grid{
+        grid-template-columns:
+            repeat(2,minmax(0,1fr));
+    }
+}
+
+</style>
+
+
+<style id="perRunChartCleanup">
+
+/* Previous chart implementations are disabled. */
+</style>
+
+
+<style id="finalNowTabLayout">
+
+#proSimRoot .pro-sim-tabs{
+    display:grid !important;
+    grid-template-columns:
+        repeat(5,minmax(0,1fr))
+        minmax(125px,1.1fr) !important;
+    gap:4px !important;
+    width:100% !important;
+}
+
+#proSimRoot .pro-sim-tab{
+    min-width:0 !important;
+    width:100% !important;
+}
+
+#proSimRoot .pro-sim-now-result{
+    background:#17243a !important;
+    border-color:#426489 !important;
+}
+
+#proStartNowButton{
+    min-width:0 !important;
+    width:100% !important;
+    min-height:28px !important;
+    padding:6px 10px !important;
+    border-radius:6px !important;
+
+    background:#167146 !important;
+    border:1px solid #2c9d69 !important;
+    color:#ecfff5 !important;
+
+    font-size:10px !important;
+    font-weight:750 !important;
+
+    cursor:pointer !important;
+}
+
+#proStartNowButton:hover{
+    background:#1d8856 !important;
+}
+
+#proStartNowButton:disabled{
+    background:#29343c !important;
+    border-color:#47525a !important;
+    color:#aeb8bf !important;
+    cursor:not-allowed !important;
+    opacity:1 !important;
+}
+
+@media(max-width:850px){
+
+    #proSimRoot .pro-sim-tabs{
+        grid-template-columns:
+            repeat(5,minmax(70px,1fr))
+            minmax(105px,1fr) !important;
+        overflow-x:auto;
+    }
+}
+
+</style>
+
+
+<style id="singleMinuteDataUI">
+
+/* ------------------------------------------------------------
+   ONE TIME-GRANULARITY ONLY
+   ------------------------------------------------------------ */
+
+#proHedgeEventsSection,
+#proSimRoot .pro-table-wrap[data-section="hedge-events"]{
+    display:none !important;
+}
+
+/*
+ * The P&L chart and 1-MINUTE HISTORY are the authoritative UI
+ * time series.
+ */
+#autoPnlChartSection{
+    margin-top:5px !important;
+}
+
+
+/* ------------------------------------------------------------
+   Label the single authoritative series.
+   ------------------------------------------------------------ */
+
+#autoPnlChartTitle{
+    font-size:9px !important;
+}
+
+#autoPnlChartStatus{
+    font-size:8px !important;
+    color:#8ea2b8;
+}
+
+</style>
+
+
+<style id="perRunPnlChartVisibility">
+
+/* The chart itself is allowed to exist. */
+#autoPnlChartSection{
+    display:none;
+    margin:5px 6px 5px;
+    background:#0d1827;
+    border:1px solid #20344a;
+    border-radius:7px;
+    overflow:hidden;
+}
+
+/* The selected run is started -> show chart. */
+#autoPnlChartSection.show-pnl-chart{
+    display:block !important;
+}
+
+/* Waiting runs: no chart area. */
+#autoPnlChartSection.hide-pnl-chart{
+    display:none !important;
+}
+
+</style>
+
+
+<style id="liveSummaryChartFix">
+
+/* ============================================================
+   AUTHORITATIVE P&L CHART
+   ============================================================ */
+
+#minutePnlChartSection{
+    display:none;
+    margin:5px 6px;
+    background:#0d1827;
+    border:1px solid #20344a;
+    border-radius:7px;
+    overflow:hidden;
+}
+
+#minutePnlChartSection.visible{
+    display:block !important;
+}
+
+#minutePnlChartHeader{
+    height:25px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:0 8px;
+    border-bottom:1px solid #20344a;
+}
+
+#minutePnlChartTitle{
+    font-size:9px;
+    font-weight:750;
+    letter-spacing:.45px;
+}
+
+#minutePnlChartMeta{
+    font-size:8px;
+    color:#8ea2b8;
+}
+
+#minutePnlChartWrap{
+    height:170px;
+    padding:5px 7px 7px;
+}
+
+#minutePnlChart{
+    width:100%;
+    height:158px;
+    display:block;
+    background:#08111d;
+    border-radius:5px;
+}
+
+/* Current/live values */
+#proSimRoot .live-value{
+    transition:none !important;
+}
+
+/* Never animate cards / text. */
+#proSimRoot *,
+#minutePnlChartSection *{
+    animation:none !important;
+    transition:none !important;
+}
+
+</style>
+
+
+<style id="forceHedgeEventsVisible">
+#proHedgeEventsSection{
+    display:block !important;
+    visibility:visible !important;
+    opacity:1 !important;
+}
+
+#proHedgeEventsSection .pro-section{
+    display:block !important;
+    visibility:visible !important;
+}
+
+#proHedgeEventsSection .pro-table,
+#proHedgeTable{
+    display:table !important;
+}
+</style>
+
+</head>
+<body>
+<header>
+    <h1>NIFTY Independent Minute Simulations</h1>
+    <div class="tabs">
+        <button data-run="0916">09:16</button>
+        <button data-run="0917">09:17</button>
+        <button data-run="0918">09:18</button>
+        <button data-run="0919">09:19</button>
+        <button id="nowButton" class="now">START NOW</button>
+    </div>
+</header>
+
+<main>
+    <div id="status" class="status">CONNECTING...</div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">Spot</div>
+            <div id="spot" class="value">—</div>
+        </div>
+        <div class="card">
+            <div class="label">Future</div>
+            <div id="future" class="value">—</div>
+        </div>
+        <div class="card">
+            <div class="label">ATM</div>
+            <div id="atm" class="value">—</div>
+        </div>
+        <div class="card">
+            <div class="label">Total P&L</div>
+            <div id="totalPnl" class="value">0.0000</div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h3>Trade</h3>
+        <div class="cards">
+            <div>
+                <div class="label">Entry CE</div>
+                <div id="entryCe" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Entry PE</div>
+                <div id="entryPe" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Entry Straddle</div>
+                <div id="entryStraddle" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Trade Status</div>
+                <div id="tradeStatus" class="value">WAITING</div>
+            </div>
+        </div>
+        <div id="entryReason" class="reason"></div>
+    </div>
+
+    <div class="panel">
+        <h3>Greeks</h3>
+        <div class="grid4">
+            <div>
+                <div class="label">Delta</div>
+                <div id="delta" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Gamma</div>
+                <div id="gamma" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Theta</div>
+                <div id="theta" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Vega</div>
+                <div id="vega" class="value">—</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h3>P&L History</h3>
+        <canvas id="pnlChart" width="1400" height="280"></canvas>
+    </div>
+
+    <div class="panel">
+        <h3>1-MINUTE HISTORY</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Spot</th>
+                    <th>Future</th>
+                    <th>ATM</th>
+                    <th>Straddle</th>
+                    <th>Delta</th>
+                    <th>Gamma</th>
+                    <th>Hedge</th>
+                    <th>Total P&L</th>
+                </tr>
+            </thead>
+            <tbody id="history"></tbody>
+        </table>
+    </div>
+</main>
+
+
+
+
+<div id="proSimRoot">
+  <div class="pro-sim-shell">
+
+    <div class="pro-sim-top">
+      <div class="pro-sim-title-row">
+        <div>
+          <div class="pro-sim-title">
+            NIFTY Minute Straddle Simulation
+          </div>
+          <div class="pro-sim-sub">
+            Independent live simulations · Synthetic future strategy model · 1-minute state history
+          </div>
+        </div>
+
+        <div class="pro-sim-live">
+          <span class="pro-sim-live-dot"></span>
+          <span id="proLiveStatus">LIVE</span>
+        </div>
+      </div>
+
+      <div class="pro-sim-tabs" id="proRunTabs">
+        <button class="pro-sim-tab active" data-run="0916">09:16</button>
+        <button class="pro-sim-tab" data-run="0917">09:17</button>
+        <button class="pro-sim-tab" data-run="0918">09:18</button>
+        <button class="pro-sim-tab" data-run="0919">09:19</button>
+        <button
+          class="pro-sim-tab pro-sim-now-result"
+          data-run="NOW"
+          title="View START NOW simulation"
+        >NOW</button>
+
+        <button
+          id="proStartNowButton"
+          class="pro-start-now-action"
+          type="button"
+          title="Schedule START NOW for the next full minute"
+        >START NOW</button>
+      </div>
+
+      <div class="pro-sim-status">
+        <div class="pro-pill" id="proRunState">WAITING</div>
+        <div class="pro-pill" id="proRunClock">--</div>
+        <div class="pro-pill" id="proEntryStatus">NO ENTRY</div>
+      </div>
+
+      <div class="pro-sim-status" style="margin-top:6px;">
+        <select id="proExpirySelect" style="background:#0a1420;color:#e8f0f8;border:1px solid #20344a;border-radius:6px;padding:5px 8px;font-size:11px;">
+          <option value="">Select expiry...</option>
+        </select>
+        <button id="proExpiryConfirm" style="background:#315da8;border:1px solid #4b7bc7;color:#fff;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;">Confirm Expiry</button>
+        <span id="proExpiryStatus" class="pro-pill">NO EXPIRY SELECTED</span>
+        <button id="proClearRunButton" style="background:#7a2530;border:1px solid #b23a4a;color:#ffecec;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;">Clear DB (active tab)</button>
+      </div>
+    </div>
+
+    <div class="pro-grid">
+
+      <div class="pro-card">
+        <div class="pro-card-label">Synthetic Spot</div>
+        <div class="pro-card-value" id="proSyntheticSpot">--</div>
+        <div class="pro-card-small">Strategy underlying</div>
+      </div>
+
+      <div class="pro-card">
+        <div class="pro-card-label">Actual Future</div>
+        <div class="pro-card-value" id="proActualFuture">--</div>
+        <div class="pro-card-small">NIFTY FUT market</div>
+      </div>
+
+      <div class="pro-card">
+        <div class="pro-card-label">ATM</div>
+        <div class="pro-card-value" id="proATM">--</div>
+        <div class="pro-card-small" id="proExpiry">Expiry --</div>
+      </div>
+
+
+      <div class="pro-card">
+        <div class="pro-card-label">
+          Position Straddle
+        </div>
+        <div
+          class="pro-card-value"
+          id="proCurrentStraddle"
+        >--</div>
+        <div
+          class="pro-card-small"
+          id="proEntryStraddle"
+        >Entry --</div>
+      </div>
+
+      <div class="pro-card">
+        <div class="pro-card-label">
+          Market ATM Straddle
+        </div>
+        <div
+          class="pro-card-value"
+          id="proMarketAtmStraddle"
+        >--</div>
+        <div
+          class="pro-card-small"
+          id="proMarketAtm"
+        >Market ATM --</div>
+      </div>
+
+      <div class="pro-card">
+        <div class="pro-card-label">
+          Position Strike
+        </div>
+        <div
+          class="pro-card-value"
+          id="proPositionStrike"
+        >--</div>
+        <div
+          class="pro-card-small"
+        >Frozen after entry</div>
+      </div>
+
+
+    </div>
+
+    <div class="pro-two">
+
+      <div class="pro-section">
+        <div class="pro-section-head">
+          Entry vs Current
+        </div>
+
+        <div class="pro-section-body">
+          <div class="pro-leg-grid">
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">CE Entry</div>
+              <div class="pro-leg-value" id="proEntryCE">--</div>
+            </div>
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">PE Entry</div>
+              <div class="pro-leg-value" id="proEntryPE">--</div>
+            </div>
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">Entry Straddle</div>
+              <div class="pro-leg-value" id="proEntryStraddle2">--</div>
+            </div>
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">Current CE</div>
+              <div class="pro-leg-value" id="proCurrentCE">--</div>
+            </div>
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">Current PE</div>
+              <div class="pro-leg-value" id="proCurrentPE">--</div>
+            </div>
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">Quote Source</div>
+              <div class="pro-leg-value" id="proQuoteSource">--</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="pro-section">
+        <div class="pro-section-head">
+          P&L
+        </div>
+
+        <div class="pro-section-body">
+          <div class="pro-pnl-grid">
+
+            <div class="pro-pnl">
+              <div class="pro-card-label">Option</div>
+              <div class="pro-pnl-value" id="proOptionPnl">--</div>
+            </div>
+
+            <div class="pro-pnl">
+              <div class="pro-card-label">Synthetic Hedge</div>
+              <div class="pro-pnl-value" id="proFuturePnl">--</div>
+            </div>
+
+            <div class="pro-pnl">
+              <div class="pro-card-label">Total</div>
+              <div class="pro-pnl-value" id="proTotalPnl">--</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="pro-two">
+
+      <div class="pro-section">
+        <div class="pro-section-head">
+          Greeks
+        </div>
+
+        <div class="pro-section-body">
+          <div class="pro-greeks">
+
+            <div class="pro-greek">
+              <div class="pro-greek-name">Delta</div>
+              <div class="pro-greek-value" id="proDelta">--</div>
+            </div>
+
+            <div class="pro-greek">
+              <div class="pro-greek-name">Gamma</div>
+              <div class="pro-greek-value" id="proGamma">--</div>
+            </div>
+
+            <div class="pro-greek">
+              <div class="pro-greek-name">Theta</div>
+              <div class="pro-greek-value" id="proTheta">--</div>
+            </div>
+
+            <div class="pro-greek">
+              <div class="pro-greek-name">Vega</div>
+              <div class="pro-greek-value" id="proVega">--</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="pro-section">
+        <div class="pro-section-head">
+          Hedge / Risk
+        </div>
+
+        <div class="pro-section-body">
+          <div class="pro-leg-grid">
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">Hedge</div>
+              <div class="pro-leg-value" id="proHedge">--</div>
+            </div>
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">Points Out</div>
+              <div class="pro-leg-value" id="proPointsOut">--</div>
+            </div>
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">Points Allowed</div>
+              <div class="pro-leg-value" id="proPointsAllowed">--</div>
+            </div>
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">Exit</div>
+              <div class="pro-leg-value" id="proExitReason">--</div>
+            </div>
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">Entry Time</div>
+              <div class="pro-leg-value" id="proEntryTime">--</div>
+            </div>
+
+            <div class="pro-leg">
+              <div class="pro-leg-name">Run</div>
+              <div class="pro-leg-value" id="proRunId">--</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="pro-chart-wrap">
+      <div class="pro-chart-card">
+        <div class="pro-section-head">
+          Synthetic Future / P&L Timeline
+        </div>
+        <canvas class="pro-chart" id="proChart"></canvas>
+      </div>
+    </div>
+
+    <div class="pro-table-wrap">
+      <div class="pro-section">
+        <div class="pro-section-head">
+          Hedge Events
+        </div>
+
+        <div style="overflow:auto;padding:0 8px 8px">
+          <table class="pro-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Type</th>
+                <th>Hedge</th>
+                <th>Change</th>
+                <th>Delta</th>
+                <th>Points Out</th>
+                <th>Allowed</th>
+                <th>Synthetic</th>
+                <th>Actual FUT</th>
+              </tr>
+            </thead>
+            <tbody id="proHedgeTable">
+              <tr>
+                <td colspan="9" class="pro-empty">
+                  No hedge events
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="pro-table-wrap">
+      <div class="pro-section">
+        <div class="pro-section-head">
+          1-MINUTE HISTORY
+        </div>
+
+        <div style="overflow:auto;padding:0 8px 8px">
+          <table class="pro-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Synthetic</th>
+                <th>Actual FUT</th>
+                <th>ATM</th>
+                <th>CE</th>
+                <th>PE</th>
+                <th>Straddle</th>
+                <th>Delta</th>
+                <th>Total P&L</th>
+              </tr>
+            </thead>
+            <tbody id="proHistoryTable">
+              <tr>
+                <td colspan="9" class="pro-empty">
+                  Waiting for minute history
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script id="professionalSimulationJS">
+(function(){
+
+  const RUNS = [
+    "0916",
+    "0917",
+    "0918",
+    "0919",
+    "NOW"
+  ];
+
+  const ACTIVE_RUN_KEY =
+    "nifty_minute_active_run";
+
+
+  let activeRun = "0916";
+
+
+  try {
+
+    const saved =
+
+      localStorage.getItem(
+
+        ACTIVE_RUN_KEY
+
+      );
+
+
+    if (
+
+      saved &&
+
+      RUNS.includes(saved)
+
+    ) {
+
+      activeRun = saved;
+
+    }
+
+  } catch (error) {
+
+    console.warn(
+
+      "[RUN UI] restore failed",
+
+      error
+
+    );
+
+  }
+
+
+  function persistActiveRun(runId) {
+
+    if (!RUNS.includes(runId)) {
+
+      return;
+
+    }
+
+
+    activeRun = runId;
+
+
+    try {
+
+      localStorage.setItem(
+
+        ACTIVE_RUN_KEY,
+
+        runId
+
+      );
+
+    } catch (error) {
+
+      console.warn(
+
+        "[RUN UI] persist failed",
+
+        error
+
+      );
+
+    }
+
+  }
+
+      localStorage.getItem(
+        "nifty_minute_active_run"
+      ) || "0916";
+
+  try {
+    const saved =
+      localStorage.getItem(
+        ACTIVE_RUN_KEY
+      );
+
+    if (
+      saved &&
+      RUNS.includes(saved)
+    ) {
+      activeRun = saved;
+    }
+  } catch (error) {
+    console.warn(
+      "[RUN UI] restore failed",
+      error
+    );
+  }
+
+  function persistActiveRun(runId) {
+
+    if (!RUNS.includes(runId)) {
+      return;
+    }
+
+    // Switching runs (tabs) must not carry over sticky field
+    // values from the previous run's display cache. Without
+    // this, a field that briefly returns null for the newly
+    // selected run keeps showing the OLD run's value instead
+    // (e.g. NOW's entry price bleeding into 0916's WAITING tab).
+    for (const key in __lastFieldValues) {
+      delete __lastFieldValues[key];
+    }
+    for (const key in __lastFieldUpdatedAt) {
+      delete __lastFieldUpdatedAt[key];
+    }
+
+    activeRun = runId;
+
+    try {
+      localStorage.setItem(
+        ACTIVE_RUN_KEY,
+        activeRun
+      );
+    } catch (error) {
+      console.warn(
+        "[RUN UI] persist failed",
+        error
+      );
+    }
+  }
+
+  let timer = null;
+
+  const $ = id =>
+    document.getElementById(id);
+
+  // Sticky display cache: once a field has shown a real value,
+  // a transient null/empty poll result will not blank it back
+  // to "--". Only used for setText() fields (market/position
+  // reference fields), not for setPnl() P&L fields, which
+  // already always carry a real number (default 0.0).
+  const __lastFieldValues = {};
+  const __lastFieldUpdatedAt = {};
+
+  function fmt(v, digits=2){
+    if(v === null || v === undefined || !Number.isFinite(Number(v))){
+      return "--";
+    }
+
+    return Number(v).toLocaleString(
+      undefined,
+      {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits
+      }
+    );
+  }
+
+  function signed(v, digits=2){
+    if(v === null || v === undefined || !Number.isFinite(Number(v))){
+      return "--";
+    }
+
+    const n = Number(v);
+    return (n >= 0 ? "+" : "") + fmt(n, digits);
+  }
+
+  function esc(v){
+    return String(v ?? "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  function pnlClass(v){
+    const n = Number(v);
+
+    if(!Number.isFinite(n)){
+      return "pro-neutral";
+    }
+
+    if(n > 0){
+      return "pro-positive";
+    }
+
+    if(n < 0){
+      return "pro-negative";
+    }
+
+    return "pro-neutral";
+  }
+
+  function setPnl(id, value){
+    const node = $(id);
+
+    if(!node){
+      return;
+    }
+
+    node.textContent = signed(value,2);
+    node.className =
+      "pro-pnl-value "
+      +
+      pnlClass(value);
+  }
+
+  function setText(id, value){
+    const node = $(id);
+
+    if(!node){
+      return;
+    }
+
+    const isEmpty =
+      value === null ||
+      value === undefined ||
+      value === "";
+
+    if(isEmpty){
+
+      if(
+        Object.prototype.hasOwnProperty.call(
+          __lastFieldValues,
+          id
+        )
+      ){
+        // Hold the last real value instead of
+        // flashing "--" on a single stale/missed poll.
+        node.textContent = __lastFieldValues[id];
+
+        const ageMs =
+          Date.now() -
+          (__lastFieldUpdatedAt[id] || 0);
+
+        // Dim the value once it's been stale for more
+        // than ~3 polls (polling runs at 1s intervals).
+        node.style.opacity =
+          ageMs > 3000 ? "0.45" : "1";
+
+        return;
+      }
+
+      node.textContent = "--";
+      return;
+    }
+
+    __lastFieldValues[id] = value;
+    __lastFieldUpdatedAt[id] = Date.now();
+    node.style.opacity = "1";
+    node.textContent = value;
+  }
+
+  function resizeCanvas(){
+    const canvas = $("proChart");
+
+    if(!canvas){
+      return;
+    }
+
+    const rect =
+      canvas.getBoundingClientRect();
+
+    const dpr =
+      window.devicePixelRatio || 1;
+
+    canvas.width =
+      Math.max(
+        1,
+        Math.floor(rect.width * dpr)
+      );
+
+    canvas.height =
+      Math.max(
+        1,
+        Math.floor(rect.height * dpr)
+      );
+  }
+
+  function drawChart(state){
+
+    const canvas = $("proChart");
+
+    if(!canvas){
+      return;
+    }
+
+    resizeCanvas();
+
+    const ctx =
+      canvas.getContext("2d");
+
+    const dpr =
+      window.devicePixelRatio || 1;
+
+    const width =
+      canvas.width / dpr;
+
+    const height =
+      canvas.height / dpr;
+
+    ctx.setTransform(
+      dpr,
+      0,
+      0,
+      dpr,
+      0,
+      0
+    );
+
+    ctx.clearRect(
+      0,
+      0,
+      width,
+      height
+    );
+
+    const history =
+      Array.isArray(state.history)
+        ? state.history
+        : [];
+
+    if(history.length < 2){
+
+      ctx.fillStyle = "#8ea2b8";
+      ctx.font = "12px system-ui";
+
+      ctx.fillText(
+        "Waiting for minute history...",
+        20,
+        30
+      );
+
+      return;
+    }
+
+    const series = history.map(
+      row => ({
+        synthetic:
+          Number(
+            row.synthetic_future ??
+            row.spot ??
+            NaN
+          ),
+
+        pnl:
+          Number(
+            row.total_pnl ??
+            row.total ??
+            NaN
+          )
+      })
+    );
+
+    const validSynthetic =
+      series
+        .map(x => x.synthetic)
+        .filter(Number.isFinite);
+
+    const validPnl =
+      series
+        .map(x => x.pnl)
+        .filter(Number.isFinite);
+
+    if(
+      validSynthetic.length < 2
+      ||
+      validPnl.length < 2
+    ){
+      return;
+    }
+
+    function drawSeries(
+      values,
+      top,
+      bottom,
+      stroke
+    ){
+
+      const min =
+        Math.min(...values);
+
+      const max =
+        Math.max(...values);
+
+      const range =
+        Math.max(
+          max - min,
+          0.000001
+        );
+
+      ctx.strokeStyle =
+        stroke;
+
+      ctx.lineWidth = 2;
+
+      ctx.beginPath();
+
+      values.forEach(
+        (v,i) => {
+
+          const x =
+            12
+            +
+            (
+              i /
+              Math.max(
+                values.length - 1,
+                1
+              )
+            )
+            *
+            (
+              width - 24
+            );
+
+          const y =
+            bottom
+            -
+            (
+              (v - min)
+              / range
+            )
+            *
+            (
+              bottom - top
+            );
+
+          if(i === 0){
+            ctx.moveTo(x,y);
+          }else{
+            ctx.lineTo(x,y);
+          }
+
+        }
+      );
+
+      ctx.stroke();
+
+      ctx.fillStyle = "#8ea2b8";
+      ctx.font = "10px system-ui";
+
+      ctx.fillText(
+        fmt(min,2),
+        14,
+        bottom - 3
+      );
+
+      ctx.fillText(
+        fmt(max,2),
+        14,
+        top + 10
+      );
+    }
+
+    const middle =
+      Math.floor(
+        height * .52
+      );
+
+    drawSeries(
+      validSynthetic,
+      12,
+      middle - 8,
+      "#55aaff"
+    );
+
+    drawSeries(
+      validPnl,
+      middle + 8,
+      height - 12,
+      "#35d07f"
+    );
+
+    ctx.strokeStyle = "#20344a";
+    ctx.lineWidth = 1;
+
+    ctx.beginPath();
+    ctx.moveTo(12,middle);
+    ctx.lineTo(width - 12,middle);
+    ctx.stroke();
+
+    ctx.fillStyle = "#55aaff";
+    ctx.fillText(
+      "Synthetic Future",
+      width - 120,
+      20
+    );
+
+    ctx.fillStyle = "#35d07f";
+    ctx.fillText(
+      "Total P&L",
+      width - 75,
+      middle + 24
+    );
+  }
+
+  function renderHedgeEvents(state){
+
+    const tbody =
+      $("proHedgeTable");
+
+    if(!tbody){
+      return;
+    }
+
+    const events =
+      Array.isArray(state.hedge?.events)
+        ? state.hedge.events
+        : [];
+
+    if(!events.length){
+
+      tbody.innerHTML =
+        '<tr><td colspan="9" class="pro-empty">No hedge events</td></tr>';
+
+      return;
+    }
+
+    tbody.innerHTML =
+      events
+        .slice()
+        .reverse()
+        .slice(0,50)
+        .map(
+          e => `
+            <tr>
+              <td>${esc(e.timestamp)}</td>
+              <td>${esc(e.kind ?? e.type ?? "")}</td>
+              <td>${fmt(e.hedge_total ?? e.current,4)}</td>
+              <td>${signed(e.hedge_change ?? e.change,4)}</td>
+              <td>${fmt(e.delta,5)}</td>
+              <td>${fmt(e.points_out,3)}</td>
+              <td>${fmt(e.points_allowed,3)}</td>
+              <td>${fmt(e.synthetic_future ?? e.spot,2)}</td>
+              <td>${fmt(e.actual_future ?? e.future,2)}</td>
+            </tr>
+          `
+        )
+        .join("");
+  }
+
+  function renderHistory(state){
+
+    const tbody =
+      $("proHistoryTable");
+
+    if(!tbody){
+      return;
+    }
+
+    const rows =
+      Array.isArray(state.history)
+        ? state.history
+        : [];
+
+    if(!rows.length){
+
+      tbody.innerHTML =
+        '<tr><td colspan="9" class="pro-empty">Waiting for minute history</td></tr>';
+
+      return;
+    }
+
+    tbody.innerHTML =
+      rows
+        .slice()
+        .reverse()
+        .slice(0,60)
+        .map(
+          r => `
+            <tr>
+              <td>${esc(r.timestamp)}</td>
+              <td>${fmt(r.synthetic_future ?? r.spot,2)}</td>
+              <td>${fmt(r.actual_future ?? r.future,2)}</td>
+              <td>${fmt(r.atm,0)}</td>
+              <td>${fmt(r.current_ce ?? r.ce,2)}</td>
+              <td>${fmt(r.current_pe ?? r.pe,2)}</td>
+              <td>${fmt(r.straddle ?? r.current_straddle,2)}</td>
+              <td>${fmt(r.delta,5)}</td>
+              <td class="${pnlClass(r.total_pnl ?? r.total)}">
+                ${signed(r.total_pnl ?? r.total,2)}
+              </td>
+            </tr>
+          `
+        )
+        .join("");
+  }
+
+  function render(state){
+
+    if(!state){
+      return;
+    }
+
+    const market =
+      state.market || {};
+
+    const entry =
+      state.entry || {};
+
+    const position =
+      state.position || {};
+
+    const greeks =
+      state.greeks || {};
+
+    const hedge =
+      state.hedge || {};
+
+    const pnl =
+      state.pnl || {};
+
+    const exit =
+      state.exit || {};
+
+    setText(
+      "proRunId",
+      state.run_id
+    );
+
+    setText(
+      "proSyntheticSpot",
+      fmt(
+        market.synthetic_future ??
+        market.spot
+      )
+    );
+
+    setText(
+      "proActualFuture",
+      fmt(
+        market.actual_future ??
+        market.future
+      )
+    );
+
+    setText(
+      "proATM",
+      fmt(market.atm,0)
+    );
+
+    setText(
+      "proExpiry",
+      "Expiry " +
+      (entry.expiry ?? "--")
+    );
+
+    setText(
+      "proCurrentStraddle",
+      fmt(
+        position.current_straddle
+      )
+    );
+    const liveMarketAtm =
+      market.atm ??
+      position.market_atm ??
+      null;
+
+    const liveMarketStraddle =
+      market.straddle ??
+      position.market_straddle ??
+      (
+        market.ce != null &&
+        market.pe != null
+          ? Number(market.ce) +
+            Number(market.pe)
+          : null
+      );
+
+    const frozenPositionStrike =
+      position.atm ??
+      state.position_atm ??
+      state.entry_atm ??
+      entry.atm ??
+      null;
+
+    setText(
+      "proMarketAtmStraddle",
+      fmt(
+        liveMarketStraddle,
+        2
+      )
+    );
+
+    setText(
+      "proMarketAtm",
+      "Market ATM " +
+      fmt(
+        liveMarketAtm,
+        0
+      )
+    );
+
+    setText(
+      "proPositionStrike",
+      fmt(
+        frozenPositionStrike,
+        0
+      )
+    );
+
+
+    setText(
+      "proEntryStraddle",
+      "Entry " +
+      fmt(entry.straddle)
+    );
+
+    setText(
+      "proEntryCE",
+      fmt(entry.ce_price)
+    );
+
+    setText(
+      "proEntryPE",
+      fmt(entry.pe_price)
+    );
+
+    setText(
+      "proEntryStraddle2",
+      fmt(entry.straddle)
+    );
+
+    setText(
+      "proCurrentCE",
+      fmt(position.current_ce)
+    );
+
+    setText(
+      "proCurrentPE",
+      fmt(position.current_pe)
+    );
+
+    setText(
+      "proQuoteSource",
+      entry.quote_source
+    );
+
+    setPnl(
+      "proOptionPnl",
+      pnl.option
+    );
+
+    setPnl(
+      "proFuturePnl",
+      pnl.future
+    );
+
+    setPnl(
+      "proTotalPnl",
+      pnl.total
+    );
+
+    setText(
+      "proDelta",
+      fmt(greeks.delta,6)
+    );
+
+    setText(
+      "proGamma",
+      fmt(greeks.gamma,7)
+    );
+
+    setText(
+      "proTheta",
+      fmt(greeks.theta,4)
+    );
+
+    setText(
+      "proVega",
+      fmt(greeks.vega,4)
+    );
+
+    setText(
+      "proHedge",
+      fmt(hedge.current,4)
+    );
+
+    setText(
+      "proPointsOut",
+      fmt(hedge.points_out,3)
+    );
+
+    setText(
+      "proPointsAllowed",
+      fmt(hedge.points_allowed,3)
+    );
+
+    setText(
+      "proExitReason",
+      exit.reason ??
+      (
+        state.completed
+          ? "COMPLETED"
+          : state.started
+            ? "RUNNING"
+            : "WAITING"
+      )
+    );
+
+    setText(
+      "proEntryTime",
+      entry.timestamp
+    );
+
+    const runState =
+      $("proRunState");
+
+    if(runState){
+
+      runState.textContent =
+        state.completed
+          ? "COMPLETED"
+          : state.started
+            ? "RUNNING"
+            : state.armed
+              ? "ARMED"
+              : "WAITING";
+    }
+
+    setText(
+      "proEntryStatus",
+      entry.timestamp
+        ? "ENTRY " + entry.timestamp
+        : "NO ENTRY"
+    );
+
+    setText(
+      "proRunClock",
+      state.start_timestamp
+        ? "START " + state.start_timestamp
+        : "--"
+    );
+
+    drawChart(state);
+    renderHedgeEvents(state);
+    renderHistory(state);
+  }
+
+  async function fetchState(){
+
+    try{
+
+      const response =
+        await fetch(
+          "/api/runs/"
+          +
+          activeRun
+          +
+          "?ts="
+          +
+          Date.now(),
+          {
+            cache:"no-store"
+          }
+        );
+
+      if(!response.ok){
+        throw new Error(
+          "HTTP " + response.status
+        );
+      }
+
+      const state =
+        await response.json();
+
+      render(state);
+
+      if (window.__PRO_DRAW_PNL_CHART) {
+        window.__PRO_DRAW_PNL_CHART(
+          Array.isArray(state.history)
+            ? state.history
+            : []
+        );
+      }
+
+      const live =
+        $("proLiveStatus");
+
+      if(live){
+        live.textContent =
+          state.completed
+            ? "COMPLETED"
+            : "LIVE";
+      }
+
+    }catch(error){
+
+      const live =
+        $("proLiveStatus");
+
+      if(live){
+        live.textContent = "RECONNECTING";
+      }
+
+      console.error(
+        "[PRO SIM UI]",
+        error
+      );
+    }
+  }
+
+  async function startNow(){
+
+    try{
+
+      const response =
+        await fetch(
+          "/api/runs/NOW/start?ts="
+          +
+          Date.now(),
+          {
+            cache:"no-store"
+          }
+        );
+
+      const data =
+        await response.json();
+
+      if(!response.ok){
+        throw new Error(
+          data.error ||
+          "Unable to arm NOW"
+        );
+      }
+
+      persistActiveRun("NOW");
+      updateTabState();
+
+      await fetchState();
+
+    }catch(error){
+
+      console.error(
+        "[START NOW]",
+        error
+      );
+
+      alert(
+        "Unable to start NOW simulation: "
+        +
+        error.message
+      );
+    }
+  }
+
+  function updateTabState(){
+
+    document
+      .querySelectorAll(
+        ".pro-sim-tab"
+      )
+      .forEach(
+        button => {
+
+          button.classList.toggle(
+            "active",
+            button.dataset.run === activeRun
+          );
+        }
+      );
+  }
+
+  function install(){
+
+    document
+      .querySelectorAll(
+        ".pro-sim-tab"
+      )
+      .forEach(
+        button => {
+
+          button.addEventListener(
+            "click",
+            () => {
+
+              const run =
+                button.dataset.run;
+
+              if(run === "NOW"){
+
+                startNow();
+                return;
+              }
+
+              persistActiveRun(run);
+
+              updateTabState();
+              fetchState();
+            }
+          );
+        }
+      );
+
+    window.addEventListener(
+      "resize",
+      () => drawChart(
+        window.__PRO_LAST_STATE ||
+        {}
+      )
+    );
+
+    // Keep a copy for resize redraws.
+    const originalRender = render;
+
+    window.__PRO_RENDER = function(state){
+
+      window.__PRO_LAST_STATE = state;
+      originalRender(state);
+
+    };
+
+    fetchState();
+
+    if(timer){
+      clearInterval(timer);
+    }
+
+    timer =
+      setInterval(
+        fetchState,
+        1000
+      );
+  }
+
+  /*
+   * Replace render with state-caching wrapper.
+   */
+  window.__PRO_LAST_STATE = null;
+
+  if(
+    document.readyState === "loading"
+  ){
+    document.addEventListener(
+      "DOMContentLoaded",
+      install,
+      {
+        once:true
+      }
+    );
+  }else{
+    install();
+  }
+
+})();
+</script>
+
+
+<script id="compactFinalLayout">
+(function(){
+
+  function arrange(){
+
+    const root =
+      document.getElementById("proSimRoot");
+
+    if(!root){
+      return;
+    }
+
+    const shell =
+      root.querySelector(".pro-sim-shell");
+
+    const sections =
+      [...root.querySelectorAll(".pro-table-wrap")];
+
+    let hedge = null;
+    let history = null;
+
+    sections.forEach(section => {
+
+      const head =
+        section.querySelector(".pro-section-head");
+
+      const text =
+        head
+          ? head.textContent.trim().toLowerCase()
+          : "";
+
+      if(text === "hedge events"){
+        hedge = section;
+      }
+
+      if(text === "minute history"){
+        history = section;
+      }
+
+    });
+
+    const firstTwo =
+      root.querySelector(".pro-two");
+
+    if(
+      hedge &&
+      firstTwo &&
+      shell
+    ){
+      shell.insertBefore(
+        hedge,
+        firstTwo
+      );
+
+      hedge.id =
+        "proHedgeEventsSection";
+    }
+
+    const chart =
+      root.querySelector(".pro-chart-wrap");
+
+    if(chart){
+      chart.remove();
+    }
+
+    /*
+     * Remove the old independent-run visual controls.
+     * The compact pro panel owns the tabs.
+     */
+    document
+      .querySelectorAll(
+        "#fiveSimulationRunTabs,#fiveRunLabel"
+      )
+      .forEach(node => {
+
+        const parent =
+          node.closest(
+            ".card,.panel,section"
+          ) ||
+          node.parentElement;
+
+        if(parent){
+          parent.style.display =
+            "none";
+        }
+
+      });
+  }
+
+  if(
+    document.readyState === "loading"
+  ){
+    document.addEventListener(
+      "DOMContentLoaded",
+      arrange,
+      {once:true}
+    );
+  }else{
+    arrange();
+  }
+
+})();
+</script>
+
+<script id="finalPnlChartJS">
+(function(){
+
+    function installPnlChart(){
+
+        const root =
+            document.getElementById("proSimRoot");
+
+        if(!root){
+            return;
+        }
+
+        if(
+            document.getElementById(
+                "proPnlHistoryChartSection"
+            )
+        ){
+            return;
+        }
+
+        /*
+         * Find the existing 1-MINUTE HISTORY section.
+         * The P&L chart goes directly before it.
+         */
+        const tableSections =
+            Array.from(
+                root.querySelectorAll(
+                    ".pro-table-wrap"
+                )
+            );
+
+        const minuteHistory =
+            tableSections.find(
+                section => {
+
+                    const head =
+                        section.querySelector(
+                            ".pro-section-head"
+                        );
+
+                    return (
+                        head &&
+                        head.textContent
+                            .trim()
+                            .toLowerCase()
+                            .includes("minute history")
+                    );
+                }
+            );
+
+        if(!minuteHistory){
+            return;
+        }
+
+        const chart =
+            document.createElement("div");
+
+        chart.id =
+            "proPnlHistoryChartSection";
+
+        chart.innerHTML = `
+            <div class="pro-chart-title">
+                P&L HISTORY · 1-MINUTE SNAPSHOTS
+            </div>
+
+            <div id="proPnlHistoryCanvasWrap">
+                <canvas
+                    id="proPnlHistoryCanvas"
+                ></canvas>
+            </div>
+        `;
+
+        minuteHistory.parentNode.insertBefore(
+            chart,
+            minuteHistory
+        );
+
+        console.log(
+            "[PRO UI] P&L chart installed"
+        );
+    }
+
+
+    function drawPnlChart(history){
+
+        const canvas =
+            document.getElementById(
+                "proPnlHistoryCanvas"
+            );
+
+        if(!canvas){
+            return;
+        }
+
+        const rect =
+            canvas.getBoundingClientRect();
+
+        const dpr =
+            window.devicePixelRatio || 1;
+
+        const width =
+            Math.max(
+                1,
+                Math.floor(
+                    rect.width * dpr
+                )
+            );
+
+        const height =
+            Math.max(
+                1,
+                Math.floor(
+                    rect.height * dpr
+                )
+            );
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx =
+            canvas.getContext("2d");
+
+        ctx.setTransform(
+            dpr,
+            0,
+            0,
+            dpr,
+            0,
+            0
+        );
+
+        const w =
+            rect.width;
+
+        const h =
+            rect.height;
+
+        ctx.clearRect(
+            0,
+            0,
+            w,
+            h
+        );
+
+        if(
+            !Array.isArray(history)
+            ||
+            history.length < 2
+        ){
+
+            ctx.fillStyle =
+                "#8ea2b8";
+
+            ctx.font =
+                "10px system-ui";
+
+            ctx.fillText(
+                "Waiting for P&L history...",
+                10,
+                20
+            );
+
+            return;
+        }
+
+        const values =
+            history
+                .map(
+                    row =>
+                        Number(
+                            row.total_pnl ??
+                            row.total ??
+                            0
+                        )
+                )
+                .filter(
+                    Number.isFinite
+                );
+
+        if(values.length < 2){
+            return;
+        }
+
+        const min =
+            Math.min(...values);
+
+        const max =
+            Math.max(...values);
+
+        /*
+         * Keep a visible zero line whenever the range
+         * crosses zero.
+         */
+        const low =
+            Math.min(
+                min,
+                0
+            );
+
+        const high =
+            Math.max(
+                max,
+                0
+            );
+
+        const range =
+            Math.max(
+                high - low,
+                0.000001
+            );
+
+        const padX = 10;
+        const padY = 12;
+
+        /*
+         * Grid / zero line.
+         */
+        const zeroY =
+            h -
+            padY -
+            (
+                (0 - low)
+                / range
+            )
+            *
+            (
+                h - 2 * padY
+            );
+
+        ctx.strokeStyle =
+            "#20344a";
+
+        ctx.lineWidth = 1;
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            padX,
+            zeroY
+        );
+
+        ctx.lineTo(
+            w - padX,
+            zeroY
+        );
+
+        ctx.stroke();
+
+        /*
+         * P&L line.
+         */
+        ctx.strokeStyle =
+            "#35d07f";
+
+        ctx.lineWidth = 2;
+
+        ctx.beginPath();
+
+        values.forEach(
+            (value, index) => {
+
+                const x =
+                    padX
+                    +
+                    (
+                        index
+                        /
+                        Math.max(
+                            values.length - 1,
+                            1
+                        )
+                    )
+                    *
+                    (
+                        w - 2 * padX
+                    );
+
+                const y =
+                    h -
+                    padY
+                    -
+                    (
+                        (value - low)
+                        /
+                        range
+                    )
+                    *
+                    (
+                        h - 2 * padY
+                    );
+
+                if(index === 0){
+                    ctx.moveTo(
+                        x,
+                        y
+                    );
+                }else{
+                    ctx.lineTo(
+                        x,
+                        y
+                    );
+                }
+
+            }
+        );
+
+        ctx.stroke();
+
+        /*
+         * Last-value marker.
+         */
+        const last =
+            values[values.length - 1];
+
+        const lastX =
+            w - padX;
+
+        const lastY =
+            h -
+            padY
+            -
+            (
+                (last - low)
+                /
+                range
+            )
+            *
+            (
+                h - 2 * padY
+            );
+
+        ctx.fillStyle =
+            "#35d07f";
+
+        ctx.beginPath();
+
+        ctx.arc(
+            lastX,
+            lastY,
+            3,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fill();
+
+        /*
+         * Labels.
+         */
+        ctx.fillStyle =
+            "#8ea2b8";
+
+        ctx.font =
+            "9px system-ui";
+
+        ctx.fillText(
+            "Max " + max.toFixed(2),
+            10,
+            10
+        );
+
+        ctx.fillText(
+            "Min " + min.toFixed(2),
+            10,
+            h - 2
+        );
+
+        ctx.textAlign = "right";
+
+        ctx.fillText(
+            "Current " + last.toFixed(2),
+            w - 10,
+            10
+        );
+
+        ctx.textAlign = "left";
+    }
+
+
+    window.__PRO_DRAW_PNL_CHART =
+        drawPnlChart;
+
+
+    /*
+     * We hook into the existing pro UI render.
+     * The existing render function already receives the
+     * complete Simulation state.
+     */
+    function hookRender(){
+
+        if(
+            typeof window.__PRO_RENDER
+            !== "function"
+        ){
+            return;
+        }
+
+        if(
+            window.__PRO_PNL_HOOKED
+        ){
+            return;
+        }
+
+        const original =
+            window.__PRO_RENDER;
+
+        window.__PRO_RENDER =
+            function(state){
+
+                original(state);
+
+                if(state){
+
+                    drawPnlChart(
+                        Array.isArray(
+                            state.history
+                        )
+                            ? state.history
+                            : []
+                    );
+                }
+
+            };
+
+        window.__PRO_PNL_HOOKED =
+            true;
+    }
+
+
+    function boot(){
+
+        installPnlChart();
+
+        /*
+         * Existing professional UI may already have
+         * created its render wrapper. Try repeatedly for
+         * a short period rather than changing the engine.
+         */
+        hookRender();
+
+        let attempts = 0;
+
+        const timer =
+            setInterval(
+                () => {
+
+                    installPnlChart();
+                    hookRender();
+
+                    attempts++;
+
+                    if(
+                        attempts > 30
+                    ){
+                        clearInterval(timer);
+                    }
+
+                },
+                200
+            );
+    }
+
+
+    if(
+        document.readyState
+        === "loading"
+    ){
+        document.addEventListener(
+            "DOMContentLoaded",
+            boot,
+            {once:true}
+        );
+    }else{
+        boot();
+    }
+
+
+    window.addEventListener(
+        "resize",
+        () => {
+
+            const last =
+                window.__PRO_LAST_STATE;
+
+            if(last){
+                drawPnlChart(
+                    Array.isArray(
+                        last.history
+                    )
+                        ? last.history
+                        : []
+                );
+            }
+
+        }
+    );
+
+})();
+</script>
+
+
+
+
+
+
+
+
+
+<script id="nowChartBlankBeforeStart">
+(function(){
+
+    function syncNowChart(){
+
+        const section =
+            document.getElementById(
+                "autoPnlChartSection"
+            );
+
+        if(!section){
+            return;
+        }
+
+        /*
+         * Read the authoritative NOW state.
+         * We do not modify backend state here.
+         */
+        fetch(
+            "/api/runs/NOW?ts="
+            +
+            Date.now(),
+            {
+                cache:"no-store"
+            }
+        )
+        .then(
+            response =>
+                response.ok
+                    ? response.json()
+                    : null
+        )
+        .then(
+            state => {
+
+                if(!state){
+                    return;
+                }
+
+                if(
+                    state.started
+                    &&
+                    state.request_timestamp
+                ){
+
+                    section.classList.add(
+                        "show-pnl-chart"
+                    );
+
+                    section.classList.remove(
+                        "hide-pnl-chart"
+                    );
+
+                }else{
+
+                    section.classList.remove(
+                        "show-pnl-chart"
+                    );
+
+                    section.classList.add(
+                        "hide-pnl-chart"
+                    );
+                }
+            }
+        )
+        .catch(
+            () => {}
+        );
+    }
+
+    setInterval(
+        syncNowChart,
+        1000
+    );
+
+    if(
+        document.readyState === "loading"
+    ){
+
+        document.addEventListener(
+            "DOMContentLoaded",
+            syncNowChart,
+            {once:true}
+        );
+
+    }else{
+
+        syncNowChart();
+
+    }
+
+})();
+</script>
+
+
+
+
+
+<script id="expirySelectorJS">
+(function(){
+
+  function setGate(selected){
+
+    const disabled = !selected;
+
+    document.querySelectorAll(".pro-sim-tab").forEach(btn => {
+      btn.disabled = disabled;
+      btn.style.opacity = disabled ? "0.5" : "1";
+      btn.style.cursor = disabled ? "not-allowed" : "pointer";
+    });
+
+    const startBtn = document.getElementById("proStartNowButton");
+    if(startBtn){
+      startBtn.disabled = disabled;
+    }
+  }
+
+  async function refresh(){
+
+    try{
+      const res = await fetch("/api/expiries?ts=" + Date.now(), {cache:"no-store"});
+      const data = await res.json();
+
+      const sel = document.getElementById("proExpirySelect");
+      const status = document.getElementById("proExpiryStatus");
+
+      if(sel){
+
+        const current = sel.value;
+        const available = data.available || [];
+
+        sel.innerHTML =
+          '<option value="">Select expiry...</option>' +
+          available.map(e =>
+            '<option value="' + e + '"' + (e === current ? " selected" : "") + '>' + e + '</option>'
+          ).join("");
+
+        if(data.target_expiry){
+          sel.value = data.target_expiry;
+        }
+      }
+
+      if(status){
+        status.textContent =
+          data.target_expiry
+            ? "ACTIVE EXPIRY: " + data.target_expiry
+            : "NO EXPIRY SELECTED";
+      }
+
+      setGate(!!data.target_expiry);
+
+    }catch(error){
+      console.error("[EXPIRY UI]", error);
+    }
+  }
+
+  async function confirmExpiry(){
+
+    const sel = document.getElementById("proExpirySelect");
+
+    if(!sel || !sel.value){
+      alert("Choose an expiry first - only expiries the feed is currently sending complete data for are listed.");
+      return;
+    }
+
+    try{
+
+      const res = await fetch(
+        "/api/select_expiry?expiry=" + encodeURIComponent(sel.value) + "&ts=" + Date.now(),
+        {cache:"no-store"}
+      );
+
+      const data = await res.json();
+
+      if(!res.ok){
+        alert(data.error || "Unable to select expiry");
+        return;
+      }
+
+      await refresh();
+
+    }catch(error){
+      alert("Unable to select expiry: " + error.message);
+    }
+  }
+
+  function install(){
+
+    const btn = document.getElementById("proExpiryConfirm");
+
+    if(btn){
+      btn.addEventListener("click", confirmExpiry);
+    }
+
+    refresh();
+    setInterval(refresh, 3000);
+  }
+
+  if(document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", install, {once:true});
+  }else{
+    install();
+  }
+
+})();
+</script>
+
+<script id="clearRunJS">
+(function(){
+
+  function getActiveRunFromDOM(){
+    const active =
+      document.querySelector(".pro-sim-tab.active");
+
+    return active
+      ? active.dataset.run
+      : null;
+  }
+
+  async function clearActiveRun(){
+
+    const runId = getActiveRunFromDOM();
+
+    if(!runId){
+      alert("No active run selected.");
+      return;
+    }
+
+    if(
+      !confirm(
+        "Clear all persisted state for the "
+        + runId
+        + " run? This cannot be undone."
+      )
+    ){
+      return;
+    }
+
+    try{
+
+      const res = await fetch(
+        "/api/runs/" + runId + "/clear?ts=" + Date.now(),
+        {cache:"no-store"}
+      );
+
+      const data = await res.json();
+
+      if(!res.ok || data.status !== "SUCCESS"){
+        alert(data.error || "Unable to clear run");
+        return;
+      }
+
+    }catch(error){
+      alert("Unable to clear run: " + error.message);
+    }
+  }
+
+  function install(){
+
+    const btn =
+      document.getElementById("proClearRunButton");
+
+    if(btn){
+      btn.addEventListener("click", clearActiveRun);
+    }
+  }
+
+  if(document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", install, {once:true});
+  }else{
+    install();
+  }
+
+})();
+</script>
+
+</body>
+</html>
+"""
+
+
+class HTTPHandler(BaseHTTPRequestHandler):
+    def log_message(self, *_args) -> None:
+        return
+
+    def send_json(self, payload: dict, status: int = 200) -> None:
+        body = json.dumps(
+            payload,
+            default=str,
+            allow_nan=False,
+        ).encode("utf-8")
+
+        self.send_response(status)
+        self.send_header(
+            "Content-Type",
+            "application/json; charset=utf-8",
+        )
+        self.send_header(
+            "Cache-Control",
+            "no-store",
+        )
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*",
+        )
+        self.send_header(
+            "Content-Length",
+            str(len(body)),
+        )
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        path = self.path.split("?", 1)[0]
+
+        if path == "/":
+            body = DASHBOARD_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header(
+                "Content-Type",
+                "text/html; charset=utf-8",
+            )
+            self.send_header(
+                "Cache-Control",
+                "no-store",
+            )
+            self.send_header(
+                "Content-Length",
+                str(len(body)),
+            )
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/api/runs":
+            self.send_json({
+                "status": "SUCCESS",
+                "run_ids": list(RUN_IDS),
+                "runs": CONTROLLER.state(),
+            })
+            return
+
+        if path == "/api/runs/NOW/start":
+            self.send_json(
+                CONTROLLER.start_now()
+            )
+            return
+
+        if path == "/api/expiries":
+            self.send_json({
+                "target_expiry": CONTROLLER.book.target_expiry,
+                "available": CONTROLLER.book.available_expiries(),
+            })
+            return
+
+        if path.startswith("/api/select_expiry"):
+
+            from urllib.parse import parse_qs, urlsplit
+
+            query = parse_qs(urlsplit(self.path).query)
+            expiry = (query.get("expiry") or [""])[0].strip()
+
+            if not expiry:
+                self.send_json(
+                    {
+                        "status": "ERROR",
+                        "error": "Missing expiry parameter",
+                    },
+                    400,
+                )
+                return
+
+            ok, available = CONTROLLER.book.set_target_expiry(expiry)
+
+            if not ok:
+                self.send_json(
+                    {
+                        "status": "ERROR",
+                        "error": "Expiry not currently available from feed",
+                        "requested": expiry,
+                        "available": available,
+                    },
+                    400,
+                )
+                return
+
+            self.send_json({
+                "status": "SUCCESS",
+                "target_expiry": expiry,
+                "available": available,
+            })
+            return
+
+        if path.startswith("/api/runs/") and path.endswith("/clear"):
+
+            run_id = path[
+                len("/api/runs/"):-len("/clear")
+            ]
+
+            self.send_json(
+                CONTROLLER.clear_run(run_id)
+            )
+            return
+
+        if path.startswith("/api/runs/"):
+            run_id = path.rsplit("/", 1)[-1]
+            state = CONTROLLER.state(run_id)
+            if state is None:
+                self.send_json(
+                    {
+                        "status": "ERROR",
+                        "error": "Unknown simulation run",
+                        "run_id": run_id,
+                    },
+                    404,
+                )
+                return
+            self.send_json(state)
+            return
+
+        self.send_json(
+            {
+                "status": "ERROR",
+                "error": "Not found",
+            },
+            404,
+        )
+
+
+async def server_websocket_loop() -> None:
+    await ws_loop()
+
+
+def main() -> None:
+    print("=" * 72)
+    print("NIFTY CLEAN MINUTE SIMULATION SERVER")
+    print("=" * 72)
+    print(f"Feed : {WS_URI}")
+    print(f"HTTP : http://0.0.0.0:{HTTP_PORT}")
+    print("Runs : 09:16 / 09:17 / 09:18 / 09:19 / NOW")
+    print(
+        f"Quote policy : "
+        f"{'LTP fallback enabled' if USE_LTP_FALLBACK else 'strict bid/ask'}"
+    )
+    print(
+        f"Target expiry : "
+        f"{CONTROLLER.book.target_expiry or 'NOT SELECTED - use /api/select_expiry'}"
+    )
+    print("=" * 72)
+
+    thread = threading.Thread(
+        target=lambda: asyncio.run(
+            server_websocket_loop()
+        ),
+        daemon=True,
+        name="market-websocket",
+    )
+    thread.start()
+
+    server = ThreadingHTTPServer(
+        (HTTP_HOST, HTTP_PORT),
+        HTTPHandler,
+    )
+
+    print(
+        f"[HTTP] Listening on {HTTP_HOST}:{HTTP_PORT}"
+    )
+
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

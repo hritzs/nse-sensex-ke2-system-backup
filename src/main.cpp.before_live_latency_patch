@@ -1,0 +1,984 @@
+#include <iostream>
+#include <cerrno>
+#include <cstring>
+#include <vector>
+#include <cstring>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <unordered_map>
+#include <algorithm>
+#include <thread>
+#include <queue>
+#include <deque>
+#include <chrono>
+#include <cstdint>
+
+#include <mutex>
+#include <condition_variable>
+#include <csignal>
+#include <atomic>
+#include <cstdlib>
+#include <fstream>
+#include <cctype>
+#include <hiredis/hiredis.h>
+
+
+#include "config.h"
+#include "contract_loader.h"
+#include "decoder.h"
+#include "ws_server.h"
+
+// Legacy compatibility - maps token to symbol name and exchange
+std::unordered_map<uint32_t, std::pair<std::string, Exchange>> TOKEN_MAP;
+
+// ---------------------------------
+// MULTIPROCESSING THREAD POOL
+// ---------------------------------
+
+// ================================================================
+// LIVE MARKET PACKET QUEUE
+//
+// IMPORTANT:
+//
+// This is intentionally NOT an unbounded FIFO.
+//
+// If analytics/decode falls behind, retaining old packets is worse
+// than dropping stale packets because the application is a LIVE
+// market-data consumer.
+//
+// We therefore use a bounded deque and drop the OLDEST packet when
+// the queue reaches capacity.
+// ================================================================
+
+struct QueuedPacket {
+    Exchange exchange;
+    std::vector<uint8_t> data;
+
+    // Local monotonic receive timestamp.
+    uint64_t rx_ns{0};
+};
+
+static constexpr size_t MAX_PACKET_QUEUE = 2000;
+
+std::deque<QueuedPacket> PACKET_QUEUE;
+std::mutex QUEUE_MTX;
+std::condition_variable QUEUE_CV;
+
+static std::atomic<bool> g_running{true};
+
+// ================================================================
+// QUEUE / LATENCY DIAGNOSTICS
+// ================================================================
+
+struct FeedDiagnostics {
+
+    std::atomic<uint64_t> packets_received{0};
+    std::atomic<uint64_t> packets_processed{0};
+    std::atomic<uint64_t> packets_dropped{0};
+
+    std::atomic<uint64_t> bytes_received{0};
+
+    std::atomic<uint64_t> queue_latency_ns_total{0};
+    std::atomic<uint64_t> queue_latency_ns_max{0};
+
+    std::atomic<uint64_t> processing_ns_total{0};
+    std::atomic<uint64_t> processing_ns_max{0};
+
+    std::atomic<uint64_t> stale_packets{0};
+
+    std::atomic<uint64_t> max_queue_depth{0};
+
+    std::atomic<uint64_t> diagnostics_ticks{0};
+
+    uint64_t last_report_ns{0};
+    uint64_t last_packets{0};
+    uint64_t last_processed{0};
+    uint64_t last_dropped{0};
+};
+
+static FeedDiagnostics FEED_DIAG;
+
+
+static inline uint64_t steady_ns()
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count()
+    );
+}
+
+
+static inline void atomic_max(
+    std::atomic<uint64_t>& target,
+    uint64_t value)
+{
+    uint64_t current = target.load(
+        std::memory_order_relaxed
+    );
+
+    while (
+        value > current &&
+        !target.compare_exchange_weak(
+            current,
+            value,
+            std::memory_order_relaxed,
+            std::memory_order_relaxed))
+    {
+    }
+}
+
+
+// ================================================================
+// LIVE FEED HEALTH REPORT
+// ================================================================
+
+static void print_feed_diagnostics()
+{
+    const uint64_t now = steady_ns();
+
+    if (FEED_DIAG.last_report_ns == 0) {
+        FEED_DIAG.last_report_ns = now;
+        FEED_DIAG.last_packets =
+            FEED_DIAG.packets_received.load();
+        FEED_DIAG.last_processed =
+            FEED_DIAG.packets_processed.load();
+        FEED_DIAG.last_dropped =
+            FEED_DIAG.packets_dropped.load();
+
+        return;
+    }
+
+    const uint64_t elapsed =
+        now - FEED_DIAG.last_report_ns;
+
+    if (elapsed < 1'000'000'000ULL)
+        return;
+
+    const double seconds =
+        elapsed / 1'000'000'000.0;
+
+    const uint64_t received =
+        FEED_DIAG.packets_received.load();
+
+    const uint64_t processed =
+        FEED_DIAG.packets_processed.load();
+
+    const uint64_t dropped =
+        FEED_DIAG.packets_dropped.load();
+
+    const uint64_t rx_delta =
+        received - FEED_DIAG.last_packets;
+
+    const uint64_t processed_delta =
+        processed - FEED_DIAG.last_processed;
+
+    const uint64_t dropped_delta =
+        dropped - FEED_DIAG.last_dropped;
+
+    const double rx_rate =
+        rx_delta / seconds;
+
+    const double processed_rate =
+        processed_delta / seconds;
+
+    const double drop_rate =
+        dropped_delta / seconds;
+
+    const uint64_t total_q_ns =
+        FEED_DIAG.queue_latency_ns_total.load();
+
+    const uint64_t total_p_ns =
+        FEED_DIAG.processing_ns_total.load();
+
+    const double avg_queue_ms =
+        processed > 0
+            ? (
+                static_cast<double>(total_q_ns) /
+                static_cast<double>(processed) /
+                1'000'000.0
+              )
+            : 0.0;
+
+    const double avg_processing_ms =
+        processed > 0
+            ? (
+                static_cast<double>(total_p_ns) /
+                static_cast<double>(processed) /
+                1'000'000.0
+              )
+            : 0.0;
+
+    const uint64_t max_queue_ns =
+        FEED_DIAG.queue_latency_ns_max.load();
+
+    const uint64_t max_processing_ns =
+        FEED_DIAG.processing_ns_max.load();
+
+    size_t depth = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(QUEUE_MTX);
+        depth = PACKET_QUEUE.size();
+    }
+
+    std::cout
+        << "\n"
+        << "============================================================\n"
+        << "[LIVE FEED HEALTH]\n"
+        << "------------------------------------------------------------\n"
+        << "RX rate             : "
+        << rx_rate
+        << " pkt/s\n"
+
+        << "PROCESS rate        : "
+        << processed_rate
+        << " pkt/s\n"
+
+        << "DROP rate           : "
+        << drop_rate
+        << " pkt/s\n"
+
+        << "TOTAL received      : "
+        << received
+        << "\n"
+
+        << "TOTAL processed     : "
+        << processed
+        << "\n"
+
+        << "TOTAL dropped       : "
+        << dropped
+        << "\n"
+
+        << "QUEUE depth         : "
+        << depth
+        << " / "
+        << MAX_PACKET_QUEUE
+        << "\n"
+
+        << "QUEUE max depth     : "
+        << FEED_DIAG.max_queue_depth.load()
+        << "\n"
+
+        << "AVG queue latency   : "
+        << avg_queue_ms
+        << " ms\n"
+
+        << "MAX queue latency   : "
+        << (
+            static_cast<double>(max_queue_ns) /
+            1'000'000.0
+        )
+        << " ms\n"
+
+        << "AVG processing      : "
+        << avg_processing_ms
+        << " ms\n"
+
+        << "MAX processing      : "
+        << (
+            static_cast<double>(max_processing_ns) /
+            1'000'000.0
+        )
+        << " ms\n"
+
+        << "STALE packets       : "
+        << FEED_DIAG.stale_packets.load()
+        << "\n"
+
+        << "------------------------------------------------------------\n";
+
+    if (depth > MAX_PACKET_QUEUE * 0.75) {
+        std::cout
+            << "[WARNING] FIFO queue > 75% capacity\n";
+    }
+
+    if (dropped_delta > 0) {
+        std::cout
+            << "[WARNING] PACKETS DROPPED THIS SECOND: "
+            << dropped_delta
+            << "\n";
+    }
+
+    if (avg_queue_ms > 100.0) {
+        std::cout
+            << "[CRITICAL] Average queue latency > 100 ms\n";
+    }
+
+    if (max_queue_ns > 1'000'000'000ULL) {
+        std::cout
+            << "[CRITICAL] Queue latency exceeded 1 second\n";
+    }
+
+    if (avg_processing_ms > 1.0) {
+        std::cout
+            << "[WARNING] Average packet processing > 1 ms\n";
+    }
+
+    std::cout
+        << "============================================================\n"
+        << std::endl;
+
+    FEED_DIAG.last_report_ns = now;
+    FEED_DIAG.last_packets = received;
+    FEED_DIAG.last_processed = processed;
+    FEED_DIAG.last_dropped = dropped;
+}
+
+
+// ================================================================
+// WORKER THREAD
+// ================================================================
+
+static void live_packet_worker()
+{
+    while (g_running) {
+
+        QueuedPacket item;
+
+        {
+            std::unique_lock<std::mutex> lock(QUEUE_MTX);
+
+            QUEUE_CV.wait(
+                lock,
+                [] {
+                    return
+                        !g_running ||
+                        !PACKET_QUEUE.empty();
+                }
+            );
+
+            if (
+                !g_running &&
+                PACKET_QUEUE.empty()
+            ) {
+                return;
+            }
+
+            item =
+                std::move(
+                    PACKET_QUEUE.front()
+                );
+
+            PACKET_QUEUE.pop_front();
+        }
+
+        if (item.data.empty())
+            continue;
+
+        const uint64_t process_start =
+            steady_ns();
+
+        uint64_t queue_latency_ns = 0;
+
+        if (process_start >= item.rx_ns)
+            queue_latency_ns =
+                process_start - item.rx_ns;
+
+        /*
+         * A packet waiting more than 500 ms is already stale
+         * for the LIVE simulation.
+         */
+        if (queue_latency_ns > 500'000'000ULL) {
+            FEED_DIAG.stale_packets.fetch_add(
+                1,
+                std::memory_order_relaxed
+            );
+        }
+
+        FEED_DIAG.queue_latency_ns_total.fetch_add(
+            queue_latency_ns,
+            std::memory_order_relaxed
+        );
+
+        atomic_max(
+            FEED_DIAG.queue_latency_ns_max,
+            queue_latency_ns
+        );
+
+        process_packet(
+            item.exchange,
+            item.data.data(),
+            item.data.size()
+        );
+
+        const uint64_t process_end =
+            steady_ns();
+
+        const uint64_t processing_ns =
+            process_end - process_start;
+
+        FEED_DIAG.processing_ns_total.fetch_add(
+            processing_ns,
+            std::memory_order_relaxed
+        );
+
+        atomic_max(
+            FEED_DIAG.processing_ns_max,
+            processing_ns
+        );
+
+        FEED_DIAG.packets_processed.fetch_add(
+            1,
+            std::memory_order_relaxed
+        );
+
+        print_feed_diagnostics();
+    }
+}
+
+
+// ---------------------------------
+// GLOBAL LOGGING & REDIS CACHE
+// ---------------------------------
+std::ofstream g_logFile;
+std::mutex g_logMtx;
+redisContext* g_redis = nullptr;
+std::mutex g_redisMtx;
+
+// Centralized Logger: Prints to Console, writes to File, and broadcasts to UI
+void SystemLog(const std::string& msg, bool is_error = false) {
+    std::lock_guard<std::mutex> lock(g_logMtx);
+    
+    // Console Output
+    if (is_error) std::cerr << msg << std::endl;
+    else std::cout << msg << std::endl;
+    
+    // File Output
+    if (g_logFile.is_open()) {
+        g_logFile << "[SYS] " << msg << std::endl;
+        g_logFile.flush();
+    }
+    
+    // WebSocket Broadcast to UI Logs Tab
+    // (Assuming your ws_server exposes a generic broadcast method)
+    // std::string json_log = "{\"type\":\"log\",\"message\":\"" + msg + "\"}";
+    // broadcast_to_all_clients(json_log); 
+}
+
+void signal_handler(int signum) {
+    // WARNING: Do not use SystemLog (which uses std::mutex and I/O) inside a signal handler.
+    // Mutexes are not async-signal-safe and can cause a deadlock if interrupted mid-log.
+    // We safely set the atomic flag and notify threads to exit instead.
+    g_running = false;
+    QUEUE_CV.notify_all(); // Wake up all waiting workers
+}
+
+void worker_thread()
+{
+    live_packet_worker();
+}
+
+void multicast_listener(Exchange exchange, const char* ip, int port, const char* local_ip) {
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        SystemLog("Socket creation failed for " + std::string(ip) + ":" + std::to_string(port), true);
+        return;
+    }
+
+    int reuse = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+    struct timeval tv;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    if (bind(sock, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        int err = errno;
+
+        SystemLog(
+            "Bind failed for " +
+            std::string(ip) + ":" +
+            std::to_string(port) +
+            " | errno=" +
+            std::to_string(err) +
+            " | error=" +
+            std::string(std::strerror(err)),
+            true
+        );
+
+        close(sock);
+        return;
+    }
+
+    SystemLog(
+        "UDP bind SUCCESS on 0.0.0.0:" +
+        std::to_string(port)
+    );
+
+    ip_mreq mreq{};
+    mreq.imr_multiaddr.s_addr = inet_addr(ip);
+    mreq.imr_interface.s_addr = inet_addr(local_ip);
+
+    if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
+        int err = errno;
+
+        SystemLog(
+            "Multicast join failed for " +
+            std::string(ip) + ":" +
+            std::to_string(port) +
+            " | local_ip=" +
+            std::string(local_ip) +
+            " | errno=" +
+            std::to_string(err) +
+            " | error=" +
+            std::string(std::strerror(err)),
+            true
+        );
+
+        close(sock);
+        return;
+    }
+
+    SystemLog(
+        "Multicast JOIN SUCCESS: group=" +
+        std::string(ip) +
+        " port=" +
+        std::to_string(port) +
+        " interface=" +
+        std::string(local_ip)
+    );
+
+    SystemLog("Listening for market data on " + std::string(ip) + ":" + std::to_string(port));
+
+    std::vector<uint8_t> buf(Config::MAX_PACKET);
+
+    while (g_running) {
+        ssize_t n = recv(sock, buf.data(), buf.size(), 0);
+
+        if (n < 0) {
+            // Error or timeout, just continue to check g_running flag
+            continue;
+        } else if (n > 0) {
+            static bool first_packet = true;
+            if (first_packet) {
+                SystemLog("[MULTICAST] SUCCESS! First byte of market data received!");
+                first_packet = false;
+            }
+            QueuedPacket pkt;
+
+            pkt.exchange = exchange;
+
+            pkt.data.assign(
+                buf.begin(),
+                buf.begin() + n
+            );
+
+            pkt.rx_ns = steady_ns();
+
+            FEED_DIAG.packets_received.fetch_add(
+                1,
+                std::memory_order_relaxed
+            );
+
+            FEED_DIAG.bytes_received.fetch_add(
+                static_cast<uint64_t>(n),
+                std::memory_order_relaxed
+            );
+
+            {
+                std::lock_guard<std::mutex> lock(QUEUE_MTX);
+
+                /*
+                 * LIVE MARKET POLICY:
+                 *
+                 * Never allow old packets to accumulate forever.
+                 *
+                 * Drop oldest first when full.
+                 */
+                if (
+                    PACKET_QUEUE.size()
+                    >= MAX_PACKET_QUEUE
+                ) {
+
+                    PACKET_QUEUE.pop_front();
+
+                    FEED_DIAG.packets_dropped.fetch_add(
+                        1,
+                        std::memory_order_relaxed
+                    );
+                }
+
+                PACKET_QUEUE.emplace_back(
+                    std::move(pkt)
+                );
+
+                atomic_max(
+                    FEED_DIAG.max_queue_depth,
+                    static_cast<uint64_t>(
+                        PACKET_QUEUE.size()
+                    )
+                );
+            }
+
+            QUEUE_CV.notify_one();
+        }
+    }
+
+    close(sock);
+    SystemLog("Stopped listening on " + std::string(ip) + ":" + std::to_string(port));
+}
+
+#ifndef DISABLE_KDB
+void kdb_writer_thread() {
+    SystemLog("[KDB] Writer thread started. Monitoring connections...");
+    
+    int kdb_handle = 0;
+    redisContext *redis = nullptr;
+    
+    auto safe_stoll = [](const std::string &s) -> long long {
+        try { return std::stoll(s); } catch(...) { return 0; }
+    };
+
+    auto safe_stod = [](const std::string &s) -> double {
+        try { return std::stod(s); } catch(...) { return 0.0; }
+    };
+
+    auto extract_json_string = [](const std::string& json, const std::string& key) -> std::string {
+        std::string search = "\"" + key + "\":\"";
+        size_t start_pos = json.find(search);
+        if (start_pos == std::string::npos) return "";
+        start_pos += search.length();
+        size_t end_pos = json.find("\"", start_pos);
+        if (end_pos == std::string::npos) return "";
+        return json.substr(start_pos, end_pos - start_pos);
+    };
+
+    auto extract_json_number = [](const std::string& json, const std::string& key) -> std::string {
+        std::string search = "\"" + key + "\"";
+        size_t start_pos = json.find(search);
+        if (start_pos == std::string::npos) return "0";
+        start_pos += search.length();
+        
+        // Find the colon delimiter
+        start_pos = json.find(':', start_pos);
+        if (start_pos == std::string::npos) return "0";
+        start_pos++; // move past colon
+        
+        // Skip any whitespace characters
+        while (start_pos < json.length() && std::isspace(json[start_pos])) {
+            start_pos++;
+        }
+        
+        size_t end_pos = start_pos;
+        while (end_pos < json.length() && (isdigit(json[end_pos]) || json[end_pos] == '.' || json[end_pos] == '-')) {
+            end_pos++;
+        }
+        
+        if (end_pos == start_pos) return "0";
+        return json.substr(start_pos, end_pos - start_pos);
+    };
+
+    while(g_running) {
+        // 1. Maintain KDB+ Connection & Setup Native RPC Function
+        if (kdb_handle <= 0) {
+            kdb_handle = khp((S)"127.0.0.1", 5000);
+            if (kdb_handle > 0) {
+                const char* init_q = "if[not `greeks_chain in tables[]; greeks_chain:([] time:`timestamp$(); sym:`symbol$(); underlying:`symbol$(); expiry:`symbol$(); strike:`float$(); ltp:`float$(); bid:`float$(); ask:`float$(); spot:`float$(); future:`float$(); iv:`float$(); delta:`float$(); gamma:`float$(); theta:`float$(); vega:`float$(); chg1d:`float$(); chg5:`float$(); chg15:`float$(); chg30:`float$(); chg60:`float$(); max_iv:`float$(); min_iv:`float$(); oi:`long$(); volume:`long$(); lpp_high:`float$(); lpp_low:`float$(); prev_oi:`long$(); chg_future:`float$(); atm_iv:`float$())];"
+                                     "upd_greek:{[row] `greeks_chain insert (.z.p,row)}";
+                K result = k(kdb_handle, (S)init_q, (K)0);
+                if (result) r0(result);
+                SystemLog("[KDB] Connected natively to KDB+ process.");
+            } else {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                continue;
+            }
+        }
+
+        // 2. Maintain Redis Pub/Sub Connection
+        if (redis == nullptr || redis->err) {
+            if (redis) redisFree(redis);
+            redis = redisConnect("127.0.0.1", 6379);
+            if (redis && !redis->err) {
+                struct timeval timeout = { 1, 0 }; // 1 second loop tick
+                redisSetTimeout(redis, timeout);
+                redisReply *reply = (redisReply *)redisCommand(redis, "SUBSCRIBE dalal_greeks_stream");
+                if (reply) freeReplyObject(reply);
+                SystemLog("[KDB] Redis stream active. Forwarding ticks...");
+            } else {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                continue;
+            }
+        }
+
+        // 3. Process Streams Natively
+        redisReply *reply = nullptr;
+        if (redisGetReply(redis, (void**)&reply) == REDIS_OK) {
+            if (reply == nullptr) continue; // Timeout occurred, loop to check g_running
+
+            if (reply->type == REDIS_REPLY_ARRAY && reply->elements == 3 && strcmp(reply->element[0]->str, "message") == 0) {
+                std::string payload = reply->element[2]->str;
+                if (extract_json_string(payload, "type") == "analytics") {
+                    // Async Native RPC call via negative handle (-kdb_handle)
+                    K row = knk(28, 
+                        ks((S)extract_json_string(payload, "symbol").c_str()),
+                        ks((S)extract_json_string(payload, "underlying").c_str()),
+                        ks((S)extract_json_string(payload, "expiry").c_str()),
+                        kf(safe_stod(extract_json_number(payload, "strike"))), 
+                        kf(safe_stod(extract_json_number(payload, "ltp"))),
+                        kf(safe_stod(extract_json_number(payload, "bid1"))), 
+                        kf(safe_stod(extract_json_number(payload, "ask1"))),
+                        kf(safe_stod(extract_json_number(payload, "spot"))), 
+                        kf(safe_stod(extract_json_number(payload, "future"))),
+                        kf(safe_stod(extract_json_number(payload, "iv"))), 
+                        kf(safe_stod(extract_json_number(payload, "delta"))),
+                        kf(safe_stod(extract_json_number(payload, "gamma"))), 
+                        kf(safe_stod(extract_json_number(payload, "theta"))),
+                        kf(safe_stod(extract_json_number(payload, "vega"))), 
+                        kf(safe_stod(extract_json_number(payload, "chg1d"))),
+                        kf(safe_stod(extract_json_number(payload, "chg5"))),
+                        kf(safe_stod(extract_json_number(payload, "chg15"))),
+                        kf(safe_stod(extract_json_number(payload, "chg30"))),
+                        kf(safe_stod(extract_json_number(payload, "chg60"))),
+                        kf(safe_stod(extract_json_number(payload, "max_iv"))),
+                        kf(safe_stod(extract_json_number(payload, "min_iv"))),
+                        kj(safe_stoll(extract_json_number(payload, "oi"))), 
+                        kj(safe_stoll(extract_json_number(payload, "volume"))), 
+                        kf(safe_stod(extract_json_number(payload, "lpp_high"))), 
+                        kf(safe_stod(extract_json_number(payload, "lpp_low"))),
+                        kj(safe_stoll(extract_json_number(payload, "prev_oi"))),
+                        kf(safe_stod(extract_json_number(payload, "chg_future"))),
+                        kf(safe_stod(extract_json_number(payload, "atm_iv")))
+                    );
+                    k(-kdb_handle, (S)"upd_greek", row, (K)0);
+                }
+            }
+            freeReplyObject(reply);
+        } else {
+            SystemLog("[KDB] Redis connection lost. Reconnecting...", true);
+            redisFree(redis);
+            redis = nullptr;
+        }
+    }
+
+    SystemLog("[KDB] Writer thread shutting down.");
+    if (redis) redisFree(redis);
+    if (kdb_handle > 0) kclose(kdb_handle);
+}
+#endif
+
+
+void sync_bhavcopy_files() {
+    SystemLog("Checking network for new Bhavcopy files...");
+    
+    // Use an absolute path instead of a relative path for safer execution
+    std::string base_dir = "./";
+    std::string mkdir_cmd = "mkdir -p " + base_dir + "data/BhavCopy/BSEfobhavcopy";
+    std::system(mkdir_cmd.c_str());
+
+    // PowerShell commands wrapped in C++11 raw string literals (R"(...)") to avoid escaping hell.
+    // It retrieves the newest file, builds the destination path, and only copies if it doesn't already exist locally.
+    std::string ps_nse = R"(powershell.exe -Command '$latest = Get-ChildItem "\\172.16.1.85\BhavCopy\fo*bhav.csv" | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($latest) { $dest = "\\wsl.localhost\Ubuntu\home\administrator\nse_v2_microservices\data\BhavCopy\" + $latest.Name; if (-not (Test-Path $dest)) { Copy-Item $latest.FullName -Destination "\\wsl.localhost\Ubuntu\home\administrator\nse_v2_microservices\data\BhavCopy\" } }')";
+    
+    std::string ps_bse = R"(powershell.exe -Command '$latest = Get-ChildItem "\\172.16.1.85\BhavCopy\BSEfobhavcopy\BSEfo*bhav.csv" | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($latest) { $dest = "\\wsl.localhost\Ubuntu\home\administrator\nse_v2_microservices\data\BhavCopy\BSEfobhavcopy\" + $latest.Name; if (-not (Test-Path $dest)) { Copy-Item $latest.FullName -Destination "\\wsl.localhost\Ubuntu\home\administrator\nse_v2_microservices\data\BhavCopy\BSEfobhavcopy\" } }')";
+
+    std::system(ps_nse.c_str());
+    std::system(ps_bse.c_str());
+    
+    SystemLog("Bhavcopy sync complete.");
+}
+
+int main()
+{
+    // Open persistent log file
+    g_logFile.open("dalal_backend.log", std::ios::app);
+    SystemLog("=== SERVER BOOTING UP ===");
+
+    // Automatically start required Docker containers
+    // Register signal handler for Ctrl+C
+    signal(SIGINT, signal_handler);
+    // Ignore SIGPIPE so the server doesn't crash if KDB+ is restarted
+    signal(SIGPIPE, SIG_IGN);
+
+    // Connect to Redis Cache for EOD memory
+    const char* redis_host = std::getenv("REDIS_HOST");
+    if (!redis_host) redis_host = "127.0.0.1";
+
+    g_redis = redisConnect(redis_host, 6379);
+    if (g_redis == nullptr || g_redis->err) {
+        SystemLog("Redis Error: Failed to connect to cache layer. EOD will be calculated manually.", true);
+        if (g_redis) {
+            redisFree(g_redis);
+            g_redis = nullptr;
+        }
+    } else {
+        SystemLog("[CACHE] Connected to Redis. Ready for instant EOD IV loading.");
+    }
+
+    // Note: drvfs mounts removed.
+    // Docker handles mounts automatically via volumes in docker-compose.yml
+
+    // ---------------------------------
+    // NEW: Load dual contract masters
+    // ---------------------------------
+    
+    std::string base_dir = "./";
+
+    // Load NSE contracts using robust absolute paths
+    g_contractLoader.loadNseContracts(base_dir + "shared/GreekTokens.csv");
+    
+    // Load BSE contracts using robust absolute paths
+    g_contractLoader.loadBseContracts(base_dir + "shared/BSEIndexTokens.csv");
+    
+    // Sync latest Bhavcopies from network (skips if they already exist locally)
+    // Bhavcopy synchronization is intentionally disabled on the Linux feed-only runtime.
+    // Live multicast + contract data are sufficient for the simulator startup.
+    // sync_bhavcopy_files();
+
+    // ---------------------------------
+    // Load the Latest Bhavcopies
+    // ---------------------------------
+    g_contractLoader.loadNseBhavcopy(base_dir + "data/BhavCopy/");
+    g_contractLoader.loadBseBhavcopy(base_dir + "data/BhavCopy/BSEfobhavcopy/");
+
+    // Build legacy token map for backward compatibility
+    auto allSymbols = g_contractLoader.getAllSymbols();
+    for (const auto& sym : allSymbols) {
+        auto contracts = g_contractLoader.getBySymbol(sym);
+        for (auto* c : contracts) {
+            // Construct full trading symbol (e.g., NIFTY26MAY24500CE or NIFTY26MAYFUT)
+            
+            std::string fullSymbol;
+            if (c->opType == OptionType::FUTURE || c->opStr == "FUT" || c->opStr == "XX") {
+                fullSymbol = c->symbol + "|" + c->expiry + "|0|FUT";
+            } else {
+                std::string strikeStr = std::to_string(c->strike);
+                strikeStr.erase(strikeStr.find_last_not_of('0') + 1, std::string::npos);
+                if (!strikeStr.empty() && strikeStr.back() == '.') {
+                    strikeStr.pop_back();
+                }
+                fullSymbol = c->symbol + "|" + c->expiry + "|" + strikeStr + "|" + c->opStr;
+            }
+
+            TOKEN_MAP[c->marketToken] = {fullSymbol, c->exchange};
+        }
+        // Suppressed symbol-by-symbol spam in logs, aggregate count instead
+    }
+    
+    SystemLog("Loaded total " + std::to_string(TOKEN_MAP.size()) + " contracts from contract loader");
+
+    {
+        size_t nifty_fut_count = 0;
+
+        for (const auto& kv : TOKEN_MAP)
+        {
+            const std::string& sym = kv.second.first;
+
+            if (sym.rfind("NIFTY|", 0) == 0 &&
+                sym.find("|FUT") != std::string::npos)
+            {
+                ++nifty_fut_count;
+
+                if (nifty_fut_count <= 20)
+                {
+                    std::cout
+                        << "[NIFTY FUT TOKEN]"
+                        << " token=" << kv.first
+                        << " symbol=" << sym
+                        << std::endl;
+                }
+            }
+        }
+
+        std::cout
+            << "[NIFTY FUT TOKEN COUNT] "
+            << nifty_fut_count
+            << std::endl;
+    }
+
+    {
+        size_t nifty_fut_count = 0;
+
+        for (const auto& kv : TOKEN_MAP)
+        {
+            const std::string& sym = kv.second.first;
+
+            if (sym.rfind("NIFTY|", 0) == 0 &&
+                sym.find("|FUT") != std::string::npos)
+            {
+                ++nifty_fut_count;
+
+                if (nifty_fut_count <= 20)
+                {
+                    std::cout
+                        << "[NIFTY FUT TOKEN]"
+                        << " token=" << kv.first
+                        << " symbol=" << sym
+                        << std::endl;
+                }
+            }
+        }
+
+        std::cout
+            << "[NIFTY FUT TOKEN COUNT] "
+            << nifty_fut_count
+            << std::endl;
+    }
+
+    // ---------------------------------
+    // Start native C++ WebSocket server
+    // ---------------------------------
+    start_ws_server(9001);
+
+    // Start KDB+ writer thread
+
+    std::vector<std::thread> workers;
+    
+    // MAXIMIZE PARALLELISM: Calculate how many cores the server CPU has
+    unsigned int num_workers = std::thread::hardware_concurrency();
+    if (num_workers == 0) num_workers = 8; // Fallback
+    
+    SystemLog("Starting " + std::to_string(num_workers) + " packet processing worker threads for Real-Time Greeks Parallelism.");
+    for (unsigned int i = 0; i < num_workers; ++i) {
+        workers.emplace_back(worker_thread);
+    }
+
+    // ---------------------------------
+    // Start Synchronous Multicast Listeners
+    // ---------------------------------
+
+    // Existing NSE multicast configuration.
+    // DO NOT change NSE IP or port.
+    std::thread nse_listener(
+    multicast_listener,
+    Exchange::NSE,
+    Config::NSE_MULTICAST_IP,
+    Config::NSE_PORT,
+    Config::NSE_LOCAL_IP
+);
+
+    // Start BSE (Sensex) Multicast Listener
+SystemLog("Server is up and running. Waiting for data...");
+    
+    // Keep the main thread alive while the app is running
+    while(g_running) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    if (nse_listener.joinable())
+        nse_listener.join();
+
+
+        SystemLog("Listeners stopped. Waiting for worker threads to finish...");
+    for (auto& worker : workers) {
+        worker.join();
+    }
+    SystemLog("All workers finished. Exiting.");
+
+    // Clean up resources safely on the main thread
+    if (g_redis) {
+        redisFree(g_redis);
+        g_redis = nullptr;
+    }
+    if (g_logFile.is_open()) g_logFile.close();
+
+    return 0;
+}

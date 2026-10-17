@@ -1,0 +1,31 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+.env
+*.token
+*.secret
+
+*.log
+logs/
+
+*.pkl
+*.pickle
+
+.DS_Store
+
+# Build artifacts
+build/
+*.o
+
+# Backup files
+*.bak
+*.before_*
+*.broken_backup
+*.corrupted_backup
+
+# Python environments
+venv/
+venvdash/

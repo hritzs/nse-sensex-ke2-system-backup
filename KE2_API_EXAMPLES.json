@@ -1,0 +1,393 @@
+{
+  "_notes": [
+    "Implemented feed-only subset, not full KE2 v1.",
+    "No live prices: quote values are null.",
+    "Angle-bracket strings are explanatory placeholders.",
+    "Metadata and initial instrument IDs come from the current local master and may change.",
+    "metadata_records_for_mapping is a selection of records, not a complete master response.",
+    "instrument_master_chunk_shape illustrates the envelope; actual 500-record chunk boundaries differ."
+  ],
+  "requests": {
+    "instrument_master": {
+      "type": "instrument_master",
+      "request_id": "stock-master",
+      "expiry": "2026-10-27"
+    },
+    "stock_subscribe": {
+      "type": "subscribe",
+      "request_id": "stock-bod",
+      "expiry": "2026-10-27",
+      "underlyings": [
+        {
+          "symbol": "RELIANCE",
+          "segment": "FO_STK",
+          "future": true,
+          "options": {
+            "mode": "around_future",
+            "strikes_each_side": 6,
+            "types": [
+              "CE",
+              "PE"
+            ]
+          },
+          "extra_strikes": [
+            1300
+          ]
+        }
+      ]
+    },
+    "sensex_subscribe": {
+      "type": "subscribe",
+      "request_id": "sensex-bod",
+      "expiry": "2026-10-29",
+      "underlyings": [
+        {
+          "symbol": "SENSEX",
+          "segment": "FO_IDX",
+          "future": true,
+          "options": {
+            "mode": "around_future",
+            "strikes_each_side": 6,
+            "types": [
+              "CE",
+              "PE"
+            ]
+          },
+          "extra_strikes": []
+        }
+      ]
+    },
+    "snapshot": {
+      "type": "snapshot"
+    },
+    "unsubscribe": {
+      "type": "unsubscribe",
+      "request_id": "remove-leg",
+      "instrument_ids": [
+        106719
+      ]
+    },
+    "resume": {
+      "type": "resume",
+      "session_id": "<OLD-session-id>"
+    },
+    "nifty_subscribe": {
+      "type": "subscribe",
+      "request_id": "nifty-bod",
+      "expiry": "2026-10-27",
+      "underlyings": [
+        {
+          "symbol": "NIFTY",
+          "segment": "FO_IDX",
+          "future": true,
+          "options": {
+            "mode": "around_future",
+            "strikes_each_side": 30,
+            "step": 50,
+            "types": [
+              "CE",
+              "PE"
+            ]
+          },
+          "extra_strikes": []
+        }
+      ]
+    }
+  },
+  "responses": {
+    "capabilities": {
+      "type": "capabilities",
+      "session_id": "<session-id>",
+      "data": {
+        "quotes": true,
+        "subscriptions": true,
+        "snapshots": true,
+        "instrument_master": true,
+        "heartbeat": true,
+        "bar_1m": false,
+        "eod": false,
+        "reference_daily": false,
+        "exchange_ts": false,
+        "last_trade_ts": false,
+        "volume": false,
+        "lot_size": false,
+        "tick_size": false,
+        "bse_oi": false,
+        "reason": "Only fields decoded by this repository are supplied; no external sources."
+      },
+      "master_sources": [
+        {
+          "exchange": "NSE",
+          "path": "shared/GreekTokens.csv",
+          "modified_ts": "2026-09-08T11:17:54.779+05:30"
+        },
+        {
+          "exchange": "BSE",
+          "path": "shared/BSEIndexTokens.csv",
+          "modified_ts": "2026-08-17T14:05:04.436+05:30"
+        }
+      ]
+    },
+    "subscribed_before_anchor": {
+      "type": "subscribed",
+      "request_id": "stock-bod",
+      "session_id": "<session-id>",
+      "instrument_ids": [
+        48987,
+        106719,
+        106727
+      ],
+      "pending": [
+        {
+          "symbol": "RELIANCE",
+          "expiry": "2026-10-27",
+          "reason": "future_quote_unavailable"
+        }
+      ]
+    },
+    "snapshot_before_quotes": {
+      "type": "quote",
+      "snapshot": true,
+      "exchange_ts": null,
+      "ts": "<send-time-in-IST>",
+      "data": [
+        {
+          "instrument_id": 48987,
+          "ltp": null,
+          "bid": null,
+          "ask": null,
+          "oi": null,
+          "volume": null,
+          "exchange_ts": null,
+          "last_trade_ts": null,
+          "ltq": null,
+          "bid_qty": null,
+          "ask_qty": null,
+          "received_ts": null
+        },
+        {
+          "instrument_id": 106719,
+          "ltp": null,
+          "bid": null,
+          "ask": null,
+          "oi": null,
+          "volume": null,
+          "exchange_ts": null,
+          "last_trade_ts": null,
+          "ltq": null,
+          "bid_qty": null,
+          "ask_qty": null,
+          "received_ts": null
+        },
+        {
+          "instrument_id": 106727,
+          "ltp": null,
+          "bid": null,
+          "ask": null,
+          "oi": null,
+          "volume": null,
+          "exchange_ts": null,
+          "last_trade_ts": null,
+          "ltq": null,
+          "bid_qty": null,
+          "ask_qty": null,
+          "received_ts": null
+        }
+      ],
+      "unavailable_fields": [
+        "exchange_ts",
+        "last_trade_ts",
+        "volume"
+      ]
+    },
+    "streaming_quote_shape_not_live": {
+      "type": "quote",
+      "snapshot": false,
+      "exchange_ts": null,
+      "ts": "<send-time-in-IST>",
+      "data": [
+        {
+          "instrument_id": 48987,
+          "ltp": null,
+          "bid": null,
+          "ask": null,
+          "oi": null,
+          "volume": null,
+          "exchange_ts": null,
+          "last_trade_ts": null,
+          "ltq": null,
+          "bid_qty": null,
+          "ask_qty": null,
+          "received_ts": null
+        }
+      ]
+    },
+    "heartbeat_without_source": {
+      "type": "heartbeat",
+      "ts": "<send-time-in-IST>",
+      "feed_status": "DEGRADED",
+      "source_connected": false,
+      "exchanges": {
+        "NSE": "STALE"
+      },
+      "pending": [
+        {
+          "symbol": "RELIANCE",
+          "expiry": "2026-10-27",
+          "reason": "future_quote_unavailable"
+        }
+      ]
+    },
+    "unsubscribed": {
+      "type": "unsubscribed",
+      "request_id": "remove-leg",
+      "instrument_ids": [
+        106719
+      ]
+    },
+    "invalid_request": {
+      "type": "error",
+      "code": "invalid_request",
+      "request_id": "bad-stock",
+      "message": "Expected segment FO_STK for RELIANCE"
+    },
+    "unsupported": {
+      "type": "error",
+      "code": "unsupported",
+      "request_id": null,
+      "requested_type": "eod",
+      "message": "Unavailable from the currently decoded feed",
+      "capabilities": {
+        "quotes": true,
+        "subscriptions": true,
+        "snapshots": true,
+        "instrument_master": true,
+        "heartbeat": true,
+        "bar_1m": false,
+        "eod": false,
+        "reference_daily": false,
+        "exchange_ts": false,
+        "last_trade_ts": false,
+        "volume": false,
+        "lot_size": false,
+        "tick_size": false,
+        "bse_oi": false,
+        "reason": "Only fields decoded by this repository are supplied; no external sources."
+      }
+    },
+    "instrument_master_chunk_shape": {
+      "type": "instrument_master",
+      "request_id": "stock-master",
+      "data": [
+        {
+          "instrument_id": 48987,
+          "exchange": "NSE",
+          "symbol": "RELIANCE",
+          "instrument_type": "FUTSTK",
+          "expiry": "2026-10-27",
+          "strike": null,
+          "option_type": null,
+          "lot_size": null,
+          "tick_size": null,
+          "unavailable_fields": [
+            "lot_size",
+            "tick_size"
+          ]
+        },
+        {
+          "instrument_id": 106719,
+          "exchange": "NSE",
+          "symbol": "RELIANCE",
+          "instrument_type": "OPTSTK",
+          "expiry": "2026-10-27",
+          "strike": 1300.0,
+          "option_type": "CE",
+          "lot_size": null,
+          "tick_size": null,
+          "unavailable_fields": [
+            "lot_size",
+            "tick_size"
+          ]
+        },
+        {
+          "instrument_id": 106727,
+          "exchange": "NSE",
+          "symbol": "RELIANCE",
+          "instrument_type": "OPTSTK",
+          "expiry": "2026-10-27",
+          "strike": 1300.0,
+          "option_type": "PE",
+          "lot_size": null,
+          "tick_size": null,
+          "unavailable_fields": [
+            "lot_size",
+            "tick_size"
+          ]
+        }
+      ],
+      "more": true
+    }
+  },
+  "metadata_records_for_mapping": [
+    {
+      "instrument_id": 48987,
+      "exchange": "NSE",
+      "symbol": "RELIANCE",
+      "instrument_type": "FUTSTK",
+      "expiry": "2026-10-27",
+      "strike": null,
+      "option_type": null,
+      "lot_size": null,
+      "tick_size": null,
+      "unavailable_fields": [
+        "lot_size",
+        "tick_size"
+      ]
+    },
+    {
+      "instrument_id": 106719,
+      "exchange": "NSE",
+      "symbol": "RELIANCE",
+      "instrument_type": "OPTSTK",
+      "expiry": "2026-10-27",
+      "strike": 1300.0,
+      "option_type": "CE",
+      "lot_size": null,
+      "tick_size": null,
+      "unavailable_fields": [
+        "lot_size",
+        "tick_size"
+      ]
+    },
+    {
+      "instrument_id": 106727,
+      "exchange": "NSE",
+      "symbol": "RELIANCE",
+      "instrument_type": "OPTSTK",
+      "expiry": "2026-10-27",
+      "strike": 1300.0,
+      "option_type": "PE",
+      "lot_size": null,
+      "tick_size": null,
+      "unavailable_fields": [
+        "lot_size",
+        "tick_size"
+      ]
+    },
+    {
+      "instrument_id": 864571,
+      "exchange": "BSE",
+      "symbol": "SENSEX",
+      "instrument_type": "FUTIDX",
+      "expiry": "2026-10-29",
+      "strike": null,
+      "option_type": null,
+      "lot_size": null,
+      "tick_size": null,
+      "unavailable_fields": [
+        "lot_size",
+        "tick_size"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "source": "\\\\172.16.1.85\\Shared\\GammaShortData\\GammaShort\\LUTS_r46V2_cwnw_adj007_005_T13_5_2_2_6",
+  "cw_expected_yes_counts_match": true,
+  "nw_yes_count": 24,
+  "backtest_nw_expected_yes_count": 23,
+  "nw_production_enabled": false,
+  "files": {
+    "LUT_0920_Onwards.csv": "131d9a1140f00c36df7b3d0c81df5aad455445230fe8260442cc76de0492be0d",
+    "LUT_0916.csv": "807319199a93e6cf5a5ee9833ee55253cd86aaa471a71e6df236df0e061815c4",
+    "NW_LUT.csv": "a0acb829c9fb275cc117d9cf4dae9a66f12680d043460b3c5cdfe207831e5720",
+    "LUT_0919.csv": "3d0c637ac2880ed2feba244ee5b94a9c13190c52e2eb47b7003f0ce60e8400da",
+    "LUT_0917.csv": "2d3814e7db0bccec8a5468160047dbfb5a9f0beb5589913499bec14f20bda48f",
+    "LUT_0918.csv": "3293771ec1eb80089512ebca55adb1c25b26673fadda200e0e0fba7e97afff37"
+  }
+}

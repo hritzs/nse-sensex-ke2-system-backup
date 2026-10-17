@@ -1,0 +1,60 @@
+# ==========================================
+# Stage 1: Builder
+# ==========================================
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install compilers and dependencies
+RUN rm -rf /var/lib/apt/lists/* && \
+    echo "Acquire::http::Pipeline-Depth 0;" > /etc/apt/apt.conf.d/99fixbadproxy && \
+    apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    libssl-dev \
+    zlib1g-dev \
+    liblzo2-dev \
+    libhiredis-dev \
+    libzmq3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone uWebSockets into a standardized, portable location
+RUN git clone --recursive https://github.com/uNetworking/uWebSockets.git /opt/uWebSockets && \
+    cd /opt/uWebSockets/uSockets && \
+    make
+
+WORKDIR /app
+COPY . .
+
+# Build the application using the portable UWS_DIR variable
+RUN mkdir build && cd build && \
+    cmake -DUWS_DIR=/opt/uWebSockets .. && \
+    make -j$(nproc) nse_decoder feed_handler
+
+# ==========================================
+# Stage 2: Runtime
+# ==========================================
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install runtime libraries
+RUN rm -rf /var/lib/apt/lists/* && \
+    echo "Acquire::http::Pipeline-Depth 0;" > /etc/apt/apt.conf.d/99fixbadproxy && \
+    apt-get update && apt-get install -y \
+    libssl3 \
+    zlib1g \
+    liblzo2-2 \
+    libhiredis0.14 \
+    libzmq5 \
+    cifs-utils \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /app/build/nse_decoder .
+COPY --from=builder /app/build/feed_handler .
+
+# Run the C++ engine
+CMD ["./nse_decoder"]

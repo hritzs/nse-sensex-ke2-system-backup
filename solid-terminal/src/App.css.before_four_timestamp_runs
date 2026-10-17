@@ -1,0 +1,589 @@
+/* =========================================================
+   ELITE QUANT TERMINAL UI v3
+   Bloomberg / Zerodha Kite Pro Hybrid
+========================================================= */
+
+:root {
+  /* Default: Light theme variables */
+  --bg: #f8fafc;
+  --panel: #ffffff;
+  --panel2: #f1f5f9;
+  --border: #e2e8f0;
+  --text: #334155;
+  --muted: #64748b;
+
+  /* Subtle Light colors */
+  --green: #2e9968;
+  --red: #d95a5a;
+  --blue: #5a8bd4;
+  --yellow: #d19e45;
+
+  --shadow: 0 4px 12px rgba(0,0,0,0.05);
+}
+
+:root[data-theme="dark"] {
+    --bg: #070a0f;
+    --panel: #0c111a;
+    --panel2: #0f1622;
+    --border: #1c2633;
+    --text: #cfd7e3;
+    --muted: #7c8aa0;
+
+    /* Subtle Dark colors */
+    --green: #2a8258;
+    --red: #c24e4e;
+    --blue: #4e7bc2;
+    --yellow: #ba8c38;
+
+    --shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #070a0f;
+    --panel: #0c111a;
+    --panel2: #0f1622;
+    --border: #1c2633;
+    --text: #cfd7e3;
+    --muted: #7c8aa0;
+    --green: #2a8258;
+    --red: #c24e4e;
+    --blue: #4e7bc2;
+    --yellow: #ba8c38;
+    --shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* =========================================================
+   ROOT — The ONLY elements that get fixed height
+========================================================= */
+
+html, body, #root {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, system-ui, sans-serif;
+}
+
+/* =========================================================
+   APP SHELL — fixed column, header pinned, rest scrolls
+========================================================= */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* =========================================================
+   TOP BAR — pinned, never shrinks or scrolls
+========================================================= */
+
+.topbar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 14px;
+  min-height: 48px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  gap: 10px;
+  flex-wrap: wrap;
+  overflow-x: auto;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--green);
+  letter-spacing: 0.5px;
+}
+
+.subtitle {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.status {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* =========================================================
+   TICKER TAPE — pinned strip, never grows
+========================================================= */
+
+
+/* =========================================================
+   TAB VIEW CONTAINERS
+========================================================= */
+
+.app > div {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* =========================================================
+   TOOLBAR (inside Terminal tab)
+========================================================= */
+
+.toolbar {
+  flex: 0 0 auto;
+  height: 40px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 12px;
+  gap: 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.addBtn {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--green);
+  background: transparent;
+  color: var(--green);
+  flex-shrink: 0;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.addBtn:hover {
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+}
+
+.removeBtn {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--red);
+  background: transparent;
+  color: var(--red);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* =========================================================
+   GRID — Terminal multi-panel layout
+   IMPORTANT: align-content: start prevents cards from
+   stretching to fill unused grid rows.
+========================================================= */
+
+.gridWrap {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(760px, 1fr));
+  gap: 10px;
+  padding: 10px;
+  align-content: start;   /* ← critical: cards don't stretch */
+}
+
+.single-chain-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: visible;
+  max-height: none;
+}
+
+/* =========================================================
+   CARD — Terminal option chain cards
+   max-height so the table inside can scroll within the card
+========================================================= */
+
+.card {
+  background: linear-gradient(180deg, var(--panel), var(--panel2));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow);
+  overflow: auto;
+  resize: both;
+  min-height: 200px;
+  min-width: 300px;
+  width: 100%;
+  /* No max-height! Cards grow with content, gridWrap scrolls */
+}
+
+/* =========================================================
+   CARD HEADER — pinned inside card
+========================================================= */
+
+.cardHead {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel2);
+  flex-wrap: wrap;
+}
+
+/* =========================================================
+   INPUTS
+========================================================= */
+
+.select {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.select:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+/* =========================================================
+   METRICS RIBBON — pinned inside card
+========================================================= */
+
+.metrics {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.metrics b {
+  color: var(--text);
+  font-family: monospace;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+/* =========================================================
+   EXPIRY CHIPS — pinned, horizontal scroll only
+========================================================= */
+
+.expiryTabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.expTab {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.expTab:hover {
+  border-color: var(--blue);
+  color: var(--text);
+}
+
+.active {
+  background: var(--green);
+  color: #ffffff;
+  font-weight: 800;
+  border-color: var(--green);
+}
+
+/* =========================================================
+   TABLE WRAPPER
+   For cards: fixed height so table scrolls inside card.
+   For dashboard views (Forward IV, Spreads, etc.): the
+   outer .app > div already scrolls, so tableWrap should
+   just show all rows — no inner scroll needed there.
+   We handle this by NOT capping tableWrap height; the
+   dashboard containers scroll at the page level.
+========================================================= */
+
+.tableWrap {
+  width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+/* Inside a .card, the tableWrap DOES need to scroll */
+.card .tableWrap {
+  overflow-x: auto;
+  max-height: none;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: max-content;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel2);
+  color: var(--muted);
+  font-size: 10px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  text-align: right;
+  user-select: none;
+  resize: horizontal;
+  overflow: auto;
+}
+th::-webkit-scrollbar {
+  display: none;
+}
+
+td {
+  font-size: 11px;
+  padding: 6px 8px;
+  text-align: right;
+  font-family: monospace;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.atmRow {
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+}
+
+.atmRow td {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.strike {
+  color: white;
+  font-weight: 800;
+  text-align: center !important;
+}
+
+tr:hover {
+  background: var(--panel2);
+}
+
+.empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+
+.highlight-col {
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+
+.blue-chip-row {
+  background: color-mix(in srgb, var(--blue) 8%, transparent);
+}
+
+/* =========================================================
+   DASHBOARD VIEWS (Forward IV, Spread IV, FB Spreads,
+   IV Summary, Live Screener, Stock History, Results)
+
+   These views use inline style wrappers in JSX.
+   The .app > div rule already makes them flex + overflow-y.
+   Inner content just needs to flow naturally downward.
+========================================================= */
+
+/* Screener uses .screener-wrap class */
+.screener-wrap {
+  flex: 1 1 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Dashboard header rows (title + add button) */
+.dash-header {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+/* Horizontal scroll containers for multi-table dashboards */
+.tables-scroll-wrap {
+  display: flex;
+  gap: 20px;
+  overflow-x: auto;
+  padding-bottom: 20px;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+/* Individual table instances (Forward IV, Spread, FB, Summary) */
+.table-instance {
+  min-width: 800px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: auto;
+  resize: both;
+  min-height: 200px;
+  flex-shrink: 0;
+}
+
+/* Overrides to disable internal scrolling on dashboard tables and force them fully open */
+.dashboard-unrestricted-wrap.tableWrap,
+.dashboard-unrestricted-wrap .tableWrap {
+    max-height: none !important;
+    min-height: auto !important;
+}
+
+.dashboard-unrestricted-wrap {
+    flex: none !important;
+    height: auto !important;
+    min-height: auto !important;
+}
+
+/* =========================================================
+   SCROLLBAR
+========================================================= */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* =========================================================
+   TICKER TAPE ANIMATION
+========================================================= */
+
+.ticker-content {
+  display: flex;
+  gap: 40px;
+  align-items: center;
+  width: 100%;
+  padding: 0 15px;
+  overflow-x: auto;
+}
+
+.ticker-item {
+  display: flex;
+  align-items: center;
+  font-family: monospace;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.ticker-sym {
+  color: var(--text);
+  font-weight: bold;
+  margin-right: 6px;
+}
+
+.ticker-price { color: var(--green); }
+
+.ticker-iv {
+  color: var(--blue);
+  margin-left: 4px;
+  font-size: 12px;
+}
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media (max-width: 1100px) {
+  .gridWrap {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    min-height: auto;
+    padding: 8px 14px;
+  }
+}
+
+/* =========================================================
+   UTILITY
+========================================================= */
+
+.color-up    { color: var(--green); }
+.color-down  { color: var(--red); }
+.color-blue  { color: var(--blue); }
+.color-muted { color: var(--muted); }
+
+.view-switcher {
+  display: flex;
+  background: var(--panel2);
+  border-radius: 6px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  margin: 0 auto;
+}
+
+.view-switcher button {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.view-switcher button:hover {
+  color: var(--text);
+}

@@ -1,0 +1,16 @@
+# Ignore Python Environments
+venv/
+.venv/
+__pycache__/
+
+# Ignore Build Artifacts
+build/
+bin/
+node_modules/
+solid-terminal/node_modules/
+
+# Ignore Massive Data Files
+*.csv
+*.pcap
+*.logbuild/
+CMakeCache.txt

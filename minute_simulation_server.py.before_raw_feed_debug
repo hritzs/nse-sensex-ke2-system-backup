@@ -1,0 +1,1876 @@
+
+#!/usr/bin/env python3
+"""
+Clean NIFTY minute-by-minute straddle simulator.
+
+Design:
+    C++ decoder :9001
+            |
+            v
+    one normalized live market book
+            |
+            +--> 09:16 engine
+            +--> 09:17 engine
+            +--> 09:18 engine
+            +--> 09:19 engine
+            +--> NOW engine
+
+Important:
+- This file is independent from the legacy simulation_server.py.
+- It does not load LUTs.
+- It does not load the GammaShortDaily reference file.
+- It does not use the old five-stage signal engine.
+- It keeps independent state for every run.
+- START NOW builds immediately from the current complete live chain.
+- Every active run records one minute snapshot at most once per wall-clock minute.
+
+Quote policy:
+The current C++ feed seen during debugging was producing invalid bid/ask values
+(e.g. CE bid=0 and ask=5242.88 for a ~24150 ATM option). Therefore this clean
+simulator deliberately uses LTP for simulated entry/exit marking when the
+bid/ask pair fails sanity checks. It reports quote_source=LTP_FALLBACK rather
+than pretending the bad bid/ask are executable prices.
+
+Once the C++ top-of-book parser is corrected, set USE_LTP_FALLBACK=False to
+require a valid bid/ask pair.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import threading
+import time as time_module
+from dataclasses import dataclass, field
+from datetime import datetime, time, timedelta
+from typing import Any
+
+from zoneinfo import ZoneInfo
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import websockets
+
+
+IST = ZoneInfo("Asia/Kolkata")
+
+WS_URI = "ws://127.0.0.1:9001"
+HTTP_HOST = "0.0.0.0"
+HTTP_PORT = 8001
+
+RUN_IDS = ("0916", "0917", "0918", "0919", "NOW")
+FIXED_STARTS = {
+    "0916": time(9, 16),
+    "0917": time(9, 17),
+    "0918": time(9, 18),
+    "0919": time(9, 19),
+}
+
+MARKET_OPEN = time(9, 15)
+MARKET_CLOSE = time(15, 40)
+
+# Existing strategy/risk values from the legacy simulator.
+SL_BPS = 14.0
+TV_THRESH = 0.00015
+TV4_THRESH = 0.00060
+IV_DROP_THRESH = 0.10
+
+# Avoid the currently broken top-of-book fields until the C++ parser
+# is corrected.
+USE_LTP_FALLBACK = True
+
+RISK_FREE_RATE = 0.0
+
+
+def now_ist() -> datetime:
+    return datetime.now(IST)
+
+
+def finite(value: Any) -> float | None:
+    try:
+        x = float(value)
+        return x if math.isfinite(x) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def norm_iv(value: Any) -> float | None:
+    """Accept IV as either decimal or percentage."""
+    x = finite(value)
+    if x is None or x <= 0:
+        return None
+    if x > 2.0:
+        return x / 100.0
+    return x
+
+
+def norm_symbol(symbol: Any) -> str:
+    return str(symbol or "").strip()
+
+
+def parse_symbol(symbol: str) -> tuple[str | None, str | None, float | None, str | None]:
+    """
+    Expected current C++ pipe format:
+        NIFTY|25-AUG-26|24150|CE
+        NIFTY|25-AUG-26|0|FUT
+    """
+    parts = symbol.split("|")
+    if len(parts) >= 4:
+        underlying = parts[0].strip().upper()
+        expiry = parts[1].strip()
+        try:
+            strike = float(parts[2])
+        except (TypeError, ValueError):
+            strike = None
+        opt_type = parts[3].strip().upper()
+        return underlying, expiry, strike, opt_type
+
+    # Fallback legacy compact symbols.
+    upper = symbol.upper()
+    for opt_type in ("CE", "PE", "FUT"):
+        if upper.endswith(opt_type):
+            body = upper[:-len(opt_type)]
+            # Best-effort only; pipe-format is authoritative.
+            return "NIFTY", None, None, opt_type
+
+    return None, None, None, None
+
+
+def expiry_datetime(expiry: str) -> datetime | None:
+    """
+    Parse 25-AUG-26 / 25-AUG-2026 and treat expiry settlement as 15:30 IST.
+    Weekend adjustment is handled by stepping backwards to a weekday.
+    """
+    expiry = str(expiry or "").strip()
+    for fmt in ("%d-%b-%y", "%d-%b-%Y"):
+        try:
+            d = datetime.strptime(expiry.upper(), fmt).date()
+            dt = datetime.combine(d, time(15, 30), tzinfo=IST)
+            while dt.weekday() >= 5:
+                dt -= timedelta(days=1)
+            return dt
+        except ValueError:
+            continue
+    return None
+
+
+def exact_dte(expiry: str, now: datetime | None = None) -> float | None:
+    end = expiry_datetime(expiry)
+    if end is None:
+        return None
+    current = now or now_ist()
+    seconds = (end - current).total_seconds()
+    return max(seconds / 86400.0, 0.0)
+
+
+def norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def norm_pdf(x: float) -> float:
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def bs_price(is_call: bool, spot: float, strike: float, t: float, rate: float, vol: float) -> float:
+    if spot <= 0 or strike <= 0 or t <= 0 or vol <= 0:
+        intrinsic = max(spot - strike, 0.0) if is_call else max(strike - spot, 0.0)
+        return intrinsic
+
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * vol * vol) * t) / (vol * sqrt_t)
+    d2 = d1 - vol * sqrt_t
+
+    if is_call:
+        return spot * norm_cdf(d1) - strike * math.exp(-rate * t) * norm_cdf(d2)
+    return strike * math.exp(-rate * t) * norm_cdf(-d2) - spot * norm_cdf(-d1)
+
+
+def bs_greeks(is_call: bool, spot: float, strike: float, t: float, rate: float, vol: float) -> dict[str, float]:
+    if spot <= 0 or strike <= 0 or t <= 0 or vol <= 0:
+        delta = 1.0 if is_call else -1.0
+        return {"delta": delta, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * vol * vol) * t) / (vol * sqrt_t)
+    d2 = d1 - vol * sqrt_t
+
+    disc = math.exp(-rate * t)
+    pdf = norm_pdf(d1)
+
+    if is_call:
+        delta = norm_cdf(d1)
+        theta = (
+            -(spot * pdf * vol) / (2.0 * sqrt_t)
+            - rate * strike * disc * norm_cdf(d2)
+        ) / 365.0
+    else:
+        delta = norm_cdf(d1) - 1.0
+        theta = (
+            -(spot * pdf * vol) / (2.0 * sqrt_t)
+            + rate * strike * disc * norm_cdf(-d2)
+        ) / 365.0
+
+    gamma = pdf / (spot * vol * sqrt_t)
+    vega = spot * pdf * sqrt_t / 100.0
+
+    return {
+        "delta": delta,
+        "gamma": gamma,
+        "theta": theta,
+        "vega": vega,
+    }
+
+
+def implied_vol_from_price(
+    is_call: bool,
+    spot: float,
+    strike: float,
+    t: float,
+    price: float,
+    rate: float = RISK_FREE_RATE,
+) -> float | None:
+    """
+    Robust bisection fallback if the C++ message does not carry IV.
+    """
+    if not all(math.isfinite(x) for x in (spot, strike, t, price)):
+        return None
+    if spot <= 0 or strike <= 0 or t <= 0 or price <= 0:
+        return None
+
+    intrinsic = max(spot - strike, 0.0) if is_call else max(strike - spot, 0.0)
+    if price <= intrinsic:
+        return None
+
+    lo, hi = 1e-6, 5.0
+    p_hi = bs_price(is_call, spot, strike, t, rate, hi)
+    if price > p_hi:
+        return None
+
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        p = bs_price(is_call, spot, strike, t, rate, mid)
+        if p > price:
+            hi = mid
+        else:
+            lo = mid
+
+    return 0.5 * (lo + hi)
+
+
+@dataclass
+class Quote:
+    symbol: str
+    expiry: str
+    strike: float
+    option_type: str
+    ltp: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    iv: float | None = None
+    timestamp: Any = None
+    delta: float | None = None
+    gamma: float | None = None
+    quote_source: str = "NONE"
+
+    def mark(self) -> float | None:
+        return self.ltp
+
+    def executable_entry(self) -> float | None:
+        if (
+            self.bid is not None
+            and self.ask is not None
+            and self.bid > 0
+            and self.ask > 0
+            and self.ask >= self.bid
+            and self.ask < max(1000.0, 10.0 * max(self.ltp or 0.0, 1.0))
+        ):
+            return self.bid
+
+        if USE_LTP_FALLBACK and self.ltp is not None and self.ltp > 0:
+            return self.ltp
+
+        return None
+
+    def executable_exit(self) -> float | None:
+        if (
+            self.bid is not None
+            and self.ask is not None
+            and self.bid > 0
+            and self.ask > 0
+            and self.ask >= self.bid
+            and self.ask < max(1000.0, 10.0 * max(self.ltp or 0.0, 1.0))
+        ):
+            return self.ask
+
+        if USE_LTP_FALLBACK and self.ltp is not None and self.ltp > 0:
+            return self.ltp
+
+        return None
+
+
+class MarketBook:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.options: dict[tuple[str, int, str], Quote] = {}
+        self.futures: dict[str, float] = {}
+        self.spot: float | None = None
+        self.latest_timestamp: Any = None
+        self.last_messages = 0
+
+    def update(self, raw: dict) -> None:
+        if not isinstance(raw, dict):
+            return
+
+        msg_type = str(raw.get("type", "")).lower()
+        symbol = norm_symbol(raw.get("symbol") or raw.get("sym"))
+
+        if not symbol:
+            return
+
+        upper = symbol.upper()
+
+        # ------------------------------------------------------------
+        # STRICT NIFTY FILTER
+        #
+        # Never let another symbol overwrite the NIFTY market state.
+        #
+        # Valid pipe format:
+        #   NIFTY|25-AUG-26|24150|CE
+        #   NIFTY|25-AUG-26|0|FUT
+        #
+        # Also allow compact NIFTY option symbols beginning with NIFTY,
+        # but explicitly reject NIFTYNXT50.
+        # ------------------------------------------------------------
+
+        raw_underlying = str(
+            raw.get("underlying", "")
+        ).strip().upper()
+
+        parts = symbol.split("|")
+
+        is_nifty = (
+            upper.startswith("NIFTY|")
+            or (
+                upper.startswith("NIFTY")
+                and not upper.startswith("NIFTYNXT50")
+                and (
+                    raw_underlying == "NIFTY"
+                    or len(parts) == 1
+                )
+            )
+        )
+
+        if not is_nifty:
+            return
+
+        # Analytics message can carry direct spot/future values.
+        # Only NIFTY analytics are allowed through this branch.
+        if msg_type == "analytics":
+            s = finite(raw.get("spot"))
+            f = finite(raw.get("future"))
+
+            # Prefer explicit expiry when present.
+            expiry_for_future = str(
+                raw.get("expiry") or ""
+            ).strip()
+
+            with self.lock:
+
+                if s is not None and s > 0:
+                    self.spot = s
+
+                if f is not None and f > 0:
+                    if expiry_for_future:
+                        self.futures[
+                            expiry_for_future
+                        ] = f
+                    elif self.spot is None:
+                        # No expiry: still retain the future as
+                        # temporary NIFTY market state.
+                        self.spot = f
+
+                self.latest_timestamp = (
+                    raw.get("timestamp")
+                    or raw.get("published_at")
+                )
+
+            return
+
+        underlying, expiry, strike, opt_type = parse_symbol(symbol)
+
+        if (
+            underlying != "NIFTY"
+            and not upper.startswith("NIFTY|")
+        ):
+            return
+
+        ltp = finite(raw.get("ltp"))
+        bid = finite(raw.get("bid1", raw.get("bid", raw.get("Bid"))))
+        ask = finite(raw.get("ask1", raw.get("ask", raw.get("Ask"))))
+        iv = norm_iv(raw.get("iv"))
+
+        ts = raw.get("timestamp") or raw.get("published_at")
+
+        with self.lock:
+            self.last_messages += 1
+            self.latest_timestamp = ts
+
+            if opt_type == "FUT":
+                if expiry and ltp is not None and ltp > 0:
+                    self.futures[expiry] = ltp
+                    self.spot = ltp
+                return
+
+            if opt_type in ("CE", "PE") and expiry and strike is not None:
+                q = Quote(
+                    symbol=symbol,
+                    expiry=expiry,
+                    strike=float(strike),
+                    option_type=opt_type,
+                    ltp=ltp,
+                    bid=bid,
+                    ask=ask,
+                    iv=iv,
+                    timestamp=ts,
+                    delta=finite(raw.get("delta")),
+                    gamma=finite(raw.get("gamma")),
+                )
+
+                if (
+                    q.ask is not None
+                    and (
+                        q.ask <= 0
+                        or (
+                            q.ltp is not None
+                            and q.ask > 10.0 * max(q.ltp, 1.0)
+                        )
+                    )
+                ):
+                    q.quote_source = "LTP_FALLBACK"
+                elif (
+                    q.bid is not None
+                    and q.ask is not None
+                    and q.bid > 0
+                    and q.ask >= q.bid
+                ):
+                    q.quote_source = "BID_ASK"
+                elif q.ltp is not None:
+                    q.quote_source = "LTP_FALLBACK"
+
+                self.options[
+                    (expiry, int(round(strike)), opt_type)
+                ] = q
+
+                # Temporary diagnostic:
+                # print the first few valid NIFTY option quotes.
+                if self.last_messages <= 40:
+                    print(
+                        "[NIFTY OPTION]",
+                        q.symbol,
+                        "expiry=", q.expiry,
+                        "strike=", q.strike,
+                        "type=", q.option_type,
+                        "ltp=", q.ltp,
+                        "bid=", q.bid,
+                        "ask=", q.ask,
+                        "iv=", q.iv,
+                    )
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            return {
+                "spot": self.spot,
+                "futures": dict(self.futures),
+                "options": dict(self.options),
+                "timestamp": self.latest_timestamp,
+                "messages": self.last_messages,
+            }
+
+    def current_future(self) -> float | None:
+        with self.lock:
+            if not self.futures:
+                return None
+            # Prefer nearest expiry that is still ahead.
+            candidates: list[tuple[datetime, str, float]] = []
+            now = now_ist()
+            for exp, price in self.futures.items():
+                dt = expiry_datetime(exp)
+                if dt is not None and dt >= now:
+                    candidates.append((dt, exp, price))
+            if candidates:
+                candidates.sort()
+                return candidates[0][2]
+            return next(iter(self.futures.values()))
+
+    def current_spot(self) -> float | None:
+        with self.lock:
+            if self.spot is not None:
+                return self.spot
+            return self.current_future()
+
+    def select_expiry(self) -> str | None:
+        with self.lock:
+            now = now_ist()
+            candidates = []
+            for exp in {k[0] for k in self.options.keys()}:
+                dt = expiry_datetime(exp)
+                if dt is not None and dt >= now:
+                    candidates.append((dt, exp))
+            if not candidates:
+                return None
+            candidates.sort()
+            return candidates[0][1]
+
+    def select_atm_pair(self) -> tuple[str, int, Quote, Quote] | None:
+        with self.lock:
+            expiry = self.select_expiry()
+            if expiry is None:
+                return None
+
+            spot = self.current_spot()
+            if spot is None or spot <= 0:
+                return None
+
+            strikes = sorted(
+                {
+                    k[1]
+                    for k in self.options.keys()
+                    if k[0] == expiry
+                }
+            )
+            if not strikes:
+                return None
+
+            atm = min(
+                strikes,
+                key=lambda k: abs(k - spot)
+            )
+
+            ce = self.options.get(
+                (expiry, atm, "CE")
+            )
+            pe = self.options.get(
+                (expiry, atm, "PE")
+            )
+
+            if ce is None or pe is None:
+                return None
+
+            return expiry, atm, ce, pe
+
+
+@dataclass
+class Simulation:
+    run_id: str
+    book: MarketBook
+    lock: threading.RLock = field(default_factory=threading.RLock)
+
+    armed: bool = False
+    started: bool = False
+    completed: bool = False
+
+    start_timestamp: str | None = None
+    exit_timestamp: str | None = None
+
+    entry_timestamp: str | None = None
+    entry_expiry: str | None = None
+    entry_atm: float | None = None
+    entry_ce_symbol: str | None = None
+    entry_pe_symbol: str | None = None
+    entry_ce: float | None = None
+    entry_pe: float | None = None
+    entry_straddle: float | None = None
+    entry_spot: float | None = None
+    entry_future: float | None = None
+    entry_iv: float | None = None
+    entry_dte: float | None = None
+    entry_quote_source: str | None = None
+
+    current_ce: float | None = None
+    current_pe: float | None = None
+    current_straddle: float | None = None
+
+    option_pnl: float = 0.0
+    future_pnl: float = 0.0
+    total_pnl: float = 0.0
+
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+
+    hedge: float = 0.0
+    hedge_target: float = 0.0
+    points_out: float | None = None
+    points_allowed: float | None = None
+
+    exit_reason: str | None = None
+    entry_block_reason: str | None = None
+
+    last_minute_key: str | None = None
+    history: list[dict] = field(default_factory=list)
+    hedge_events: list[dict] = field(default_factory=list)
+    trade_history: list[dict] = field(default_factory=list)
+
+    def _current_pair(self):
+        return self.book.select_atm_pair()
+
+    def _get_iv(self, q: Quote, spot: float, atm: float, dte: float) -> float | None:
+        if q.iv is not None and q.iv > 0:
+            return q.iv
+        if q.ltp is None or q.ltp <= 0:
+            return None
+        return implied_vol_from_price(
+            q.option_type == "CE",
+            spot,
+            atm,
+            max(dte / 365.0, 1e-6),
+            q.ltp,
+        )
+
+    def _calculate_greeks(self, spot: float, atm: float, dte: float, iv: float) -> None:
+        t = max(dte / 365.0, 1e-6)
+
+        call = bs_greeks(
+            True, spot, atm, t, RISK_FREE_RATE, iv
+        )
+        put = bs_greeks(
+            False, spot, atm, t, RISK_FREE_RATE, iv
+        )
+
+        # Short CE + short PE.
+        self.delta = -(call["delta"] + put["delta"])
+        self.gamma = -(call["gamma"] + put["gamma"])
+        self.theta = -(call["theta"] + put["theta"])
+        self.vega = -(call["vega"] + put["vega"])
+
+    def _calculate_risk(self, spot: float, iv: float) -> None:
+        if self.gamma is not None and abs(self.gamma) > 1e-12:
+            self.points_out = abs(
+                (self.delta + self.hedge) / self.gamma
+            )
+        else:
+            self.points_out = None
+
+        if self.current_straddle is not None:
+            raw_allowed = (iv / 57.0) * spot
+            cap_allowed = self.current_straddle / 4.0
+            floor_allowed = 0.0008 * spot
+            self.points_allowed = max(
+                floor_allowed,
+                min(raw_allowed, cap_allowed)
+            )
+
+    def _record_hedge(self, reason: str, old: float, new: float, spot: float) -> None:
+        if abs(new - old) < 1e-10:
+            return
+
+        self.hedge_events.append({
+            "timestamp": now_ist().isoformat(timespec="seconds"),
+            "reason": reason,
+            "old_hedge": old,
+            "new_hedge": new,
+            "change": new - old,
+            "spot": spot,
+            "delta": self.delta,
+            "gamma": self.gamma,
+            "points_out": self.points_out,
+            "points_allowed": self.points_allowed,
+        })
+        self.hedge_events = self.hedge_events[-500:]
+
+    def _rebalance(self, spot: float) -> None:
+        target = -float(self.delta or 0.0)
+
+        if self.points_out is None or self.points_allowed is None:
+            self.hedge_target = target
+            return
+
+        if self.points_out >= self.points_allowed:
+            old = self.hedge
+            self.hedge = target
+            self.hedge_target = target
+            self._record_hedge(
+                "RISK_BREACH",
+                old,
+                target,
+                spot,
+            )
+        else:
+            self.hedge_target = target
+
+    def _update_pnl(self, spot: float, future: float | None) -> None:
+        if self.entry_straddle is None or self.current_straddle is None:
+            return
+
+        self.option_pnl = (
+            self.entry_straddle
+            - self.current_straddle
+        )
+
+        if (
+            future is not None
+            and self.entry_future is not None
+        ):
+            # Existing strategy convention: synthetic future/spot move.
+            self.future_pnl = (
+                self.hedge
+                * (spot - self.entry_future)
+            )
+
+        self.total_pnl = (
+            self.option_pnl
+            + self.future_pnl
+        )
+
+    def _check_exit(self, spot: float, dte: float, otm_quote: Quote | None, iv: float) -> str | None:
+        # Existing strategy's hard stop.
+        max_loss_pts = -(
+            (self.entry_spot or spot)
+            * SL_BPS
+            / 10000.0
+        )
+
+        if self.total_pnl <= max_loss_pts:
+            return "STOP_LOSS"
+
+        # Existing TV conditions use an OTM option value.
+        otm = (
+            otm_quote.ltp
+            if otm_quote is not None
+            else None
+        )
+
+        if (
+            otm is not None
+            and 2.0 * otm < TV_THRESH * spot
+        ):
+            return "OTM_TRADE_VALUE"
+
+        if (
+            otm is not None
+            and 2.0 * otm < TV4_THRESH * spot
+        ):
+            return "OTM_REFERENCE_VALUE"
+
+        current = now_ist()
+
+        # Existing IV-drop rule.
+        if (
+            current.time() >= time(14, 57)
+            and iv < IV_DROP_THRESH
+            and dte <= 1.0
+        ):
+            return "IV_DROP"
+
+        if current.time() >= time(15, 40):
+            return "EOD"
+
+        return None
+
+    def _finish(self, reason: str) -> None:
+        if self.completed:
+            return
+
+        self.completed = True
+        self.started = bool(self.started)
+        self.armed = False
+        self.exit_reason = reason
+        self.exit_timestamp = (
+            now_ist().isoformat(
+                timespec="seconds"
+            )
+        )
+
+        self.trade_history.append({
+            "entry_timestamp": self.entry_timestamp,
+            "exit_timestamp": self.exit_timestamp,
+            "reason": reason,
+            "entry_straddle": self.entry_straddle,
+            "final_straddle": self.current_straddle,
+            "option_pnl": self.option_pnl,
+            "future_pnl": self.future_pnl,
+            "total_pnl": self.total_pnl,
+        })
+
+    def build_now(self, start_timestamp: datetime | None = None) -> bool:
+        with self.lock:
+            self.armed = True
+            self.start_timestamp = (
+                start_timestamp or now_ist()
+            ).isoformat(timespec="seconds")
+
+            return self._try_enter(force=True)
+
+    def _try_enter(self, force: bool = False) -> bool:
+        pair = self._current_pair()
+
+        if pair is None:
+            self.entry_block_reason = (
+                "ATM_CE_PE_NOT_AVAILABLE"
+            )
+            return False
+
+        expiry, atm, ce, pe = pair
+        spot = self.book.current_spot()
+
+        if spot is None:
+            self.entry_block_reason = "SPOT_UNAVAILABLE"
+            return False
+
+        dte = exact_dte(expiry)
+        if dte is None or dte <= 0:
+            self.entry_block_reason = "DTE_UNAVAILABLE"
+            return False
+
+        ce_px = ce.executable_entry()
+        pe_px = pe.executable_entry()
+
+        if ce_px is None or pe_px is None:
+            self.entry_block_reason = (
+                f"QUOTES_UNAVAILABLE | "
+                f"CE={ce_px!r} PE={pe_px!r}"
+            )
+            return False
+
+        ce_iv = self._get_iv(
+            ce, spot, atm, dte
+        )
+        pe_iv = self._get_iv(
+            pe, spot, atm, dte
+        )
+
+        if ce_iv is None or pe_iv is None:
+            self.entry_block_reason = (
+                "IV_UNAVAILABLE"
+            )
+            return False
+
+        iv = 0.5 * (ce_iv + pe_iv)
+
+        self.entry_timestamp = (
+            now_ist().isoformat(timespec="seconds")
+        )
+        self.entry_expiry = expiry
+        self.entry_atm = float(atm)
+        self.entry_ce_symbol = ce.symbol
+        self.entry_pe_symbol = pe.symbol
+        self.entry_ce = float(ce_px)
+        self.entry_pe = float(pe_px)
+        self.entry_straddle = (
+            self.entry_ce
+            + self.entry_pe
+        )
+        self.entry_spot = float(spot)
+        self.entry_future = (
+            self.book.current_future()
+            or spot
+        )
+        self.entry_iv = float(iv)
+        self.entry_dte = float(dte)
+        self.entry_quote_source = (
+            "BID_ASK"
+            if (
+                ce.quote_source == "BID_ASK"
+                and pe.quote_source == "BID_ASK"
+            )
+            else "LTP_FALLBACK"
+        )
+
+        self.current_ce = ce.mark()
+        self.current_pe = pe.mark()
+        self.current_straddle = (
+            (self.current_ce or 0.0)
+            + (self.current_pe or 0.0)
+        )
+
+        self._calculate_greeks(
+            spot,
+            float(atm),
+            float(dte),
+            float(iv),
+        )
+
+        self.hedge = -float(self.delta or 0.0)
+        self.hedge_target = self.hedge
+
+        self._calculate_risk(
+            spot,
+            float(iv),
+        )
+
+        self.started = True
+        self.completed = False
+        self.entry_block_reason = None
+
+        self._record_minute()
+
+        return True
+
+    def process(self) -> None:
+        with self.lock:
+            if self.completed:
+                return
+
+            if not self.started:
+                if not self.armed:
+                    return
+
+                # NOW or scheduled run gets its first complete build.
+                if not self._try_enter():
+                    return
+
+                return
+
+            pair = self._current_pair()
+            spot = self.book.current_spot()
+
+            if pair is None or spot is None:
+                return
+
+            expiry, atm, ce, pe = pair
+            dte = exact_dte(expiry)
+
+            if dte is None:
+                return
+
+            ce_mark = ce.mark()
+            pe_mark = pe.mark()
+
+            if ce_mark is not None:
+                self.current_ce = ce_mark
+            if pe_mark is not None:
+                self.current_pe = pe_mark
+
+            if (
+                self.current_ce is not None
+                and self.current_pe is not None
+            ):
+                self.current_straddle = (
+                    self.current_ce
+                    + self.current_pe
+                )
+
+            ce_iv = self._get_iv(
+                ce, spot, atm, dte
+            )
+            pe_iv = self._get_iv(
+                pe, spot, atm, dte
+            )
+
+            iv_values = [
+                x for x in (ce_iv, pe_iv)
+                if x is not None
+            ]
+
+            if iv_values:
+                iv = sum(iv_values) / len(iv_values)
+
+                self._calculate_greeks(
+                    spot,
+                    float(atm),
+                    float(dte),
+                    float(iv),
+                )
+
+                self._calculate_risk(
+                    spot,
+                    float(iv),
+                )
+
+                self._rebalance(
+                    spot
+                )
+
+                self._update_pnl(
+                    spot,
+                    self.book.current_future(),
+                )
+
+                otm = pe if spot > atm else ce
+
+                reason = self._check_exit(
+                    spot,
+                    dte,
+                    otm,
+                    iv,
+                )
+
+                self._record_minute()
+
+                if reason:
+                    self._finish(reason)
+
+    def _record_minute(self) -> None:
+        minute_key = now_ist().strftime(
+            "%Y-%m-%d %H:%M"
+        )
+
+        if minute_key == self.last_minute_key:
+            return
+
+        self.last_minute_key = minute_key
+
+        self.history.append({
+            "timestamp":
+                now_ist().isoformat(
+                    timespec="seconds"
+                ),
+            "spot":
+                self.book.current_spot(),
+            "future":
+                self.book.current_future(),
+            "atm":
+                self.entry_atm
+                if self.started
+                else (
+                    self.book.select_atm_pair()[1]
+                    if self.book.select_atm_pair()
+                    else None
+                ),
+            "current_ce":
+                self.current_ce,
+            "current_pe":
+                self.current_pe,
+            "straddle":
+                self.current_straddle,
+            "delta":
+                self.delta,
+            "gamma":
+                self.gamma,
+            "theta":
+                self.theta,
+            "vega":
+                self.vega,
+            "hedge":
+                self.hedge,
+            "points_out":
+                self.points_out,
+            "points_allowed":
+                self.points_allowed,
+            "option_pnl":
+                self.option_pnl,
+            "future_pnl":
+                self.future_pnl,
+            "total_pnl":
+                self.total_pnl,
+            "trade_active":
+                self.started and not self.completed,
+            "quote_source":
+                self.entry_quote_source,
+        })
+
+        self.history = self.history[-500:]
+
+    def state(self) -> dict:
+        with self.lock:
+            spot = self.book.current_spot()
+            future = self.book.current_future()
+            pair = self.book.select_atm_pair()
+
+            live_atm = (
+                pair[1]
+                if pair is not None
+                else None
+            )
+
+            return {
+                "run_id": self.run_id,
+                "mode": "MINUTE_STRADDLE",
+                "armed": self.armed,
+                "started": self.started,
+                "completed": self.completed,
+                "start_timestamp": self.start_timestamp,
+                "exit_timestamp": self.exit_timestamp,
+
+                "market": {
+                    "spot": spot,
+                    "future": future,
+                    "atm": (
+                        self.entry_atm
+                        if self.started
+                        else live_atm
+                    ),
+                },
+
+                "entry": {
+                    "timestamp": self.entry_timestamp,
+                    "expiry": self.entry_expiry,
+                    "atm": self.entry_atm,
+                    "ce": self.entry_ce_symbol,
+                    "pe": self.entry_pe_symbol,
+                    "ce_price": self.entry_ce,
+                    "pe_price": self.entry_pe,
+                    "straddle": self.entry_straddle,
+                    "spot": self.entry_spot,
+                    "future": self.entry_future,
+                    "iv": self.entry_iv,
+                    "dte": self.entry_dte,
+                    "quote_source": self.entry_quote_source,
+                },
+
+                "position": {
+                    "active": self.started and not self.completed,
+                    "current_ce": self.current_ce,
+                    "current_pe": self.current_pe,
+                    "current_straddle": self.current_straddle,
+                },
+
+                "greeks": {
+                    "delta": self.delta,
+                    "gamma": self.gamma,
+                    "theta": self.theta,
+                    "vega": self.vega,
+                },
+
+                "hedge": {
+                    "current": self.hedge,
+                    "target": self.hedge_target,
+                    "points_out": self.points_out,
+                    "points_allowed": self.points_allowed,
+                    "events": self.hedge_events[-100:],
+                },
+
+                "pnl": {
+                    "option": self.option_pnl,
+                    "future": self.future_pnl,
+                    "total": self.total_pnl,
+                },
+
+                "exit": {
+                    "reason": self.exit_reason,
+                    "timestamp": self.exit_timestamp,
+                },
+
+                "entry_block_reason":
+                    self.entry_block_reason,
+
+                "history":
+                    self.history[-500:],
+
+                "trade_history":
+                    self.trade_history[-50:],
+            }
+
+
+class SimulationController:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.book = MarketBook()
+        self.runs: dict[str, Simulation] = {
+            run_id: Simulation(
+                run_id=run_id,
+                book=self.book,
+            )
+            for run_id in RUN_IDS
+        }
+        self.now_started = False
+
+    def _fixed_run_should_start(self, run_id: str) -> bool:
+        start = FIXED_STARTS[run_id]
+        now = now_ist().time()
+        return (
+            now.hour > start.hour
+            or (
+                now.hour == start.hour
+                and now.minute >= start.minute
+            )
+        )
+
+    def process_tick(self, tick: dict) -> None:
+        with self.lock:
+            self.book.update(tick)
+
+            for run_id, sim in self.runs.items():
+
+                if sim.completed:
+                    continue
+
+                if run_id == "NOW":
+                    if not self.now_started:
+                        continue
+                else:
+                    if not self._fixed_run_should_start(run_id):
+                        continue
+
+                    if not sim.armed:
+                        sim.armed = True
+                        sim.start_timestamp = (
+                            now_ist().isoformat(
+                                timespec="seconds"
+                            )
+                        )
+
+                sim.process()
+
+    def start_now(self) -> dict:
+        with self.lock:
+            sim = Simulation(
+                run_id="NOW",
+                book=self.book,
+            )
+            self.runs["NOW"] = sim
+            self.now_started = True
+
+            sim.armed = True
+            sim.start_timestamp = (
+                now_ist().isoformat(
+                    timespec="seconds"
+                )
+            )
+
+            # Complete current-minute build immediately.
+            sim.build_now(
+                now_ist()
+            )
+
+            return sim.state()
+
+    def state(self, run_id: str | None = None) -> Any:
+        with self.lock:
+            if run_id:
+                sim = self.runs.get(run_id)
+                return sim.state() if sim else None
+            return {
+                run_id:
+                    sim.state()
+                for run_id, sim in self.runs.items()
+            }
+
+
+CONTROLLER = SimulationController()
+
+
+async def ws_loop():
+    while True:
+        try:
+            print(f"[WS] Connecting to {WS_URI} ...")
+            async with websockets.connect(
+                WS_URI,
+                ping_interval=20,
+                ping_timeout=20,
+                max_size=64 * 1024 * 1024,
+            ) as ws:
+                print("[WS] Connected to C++ feed :9001")
+
+                try:
+                    await ws.send(
+                        json.dumps({
+                            "action": "subscribe",
+                            "channel": "ticks",
+                        })
+                    )
+                except Exception:
+                    pass
+
+                async for raw in ws:
+                    try:
+                        if isinstance(raw, bytes):
+                            raw = raw.decode(
+                                "utf-8",
+                                errors="replace",
+                            )
+
+                        payload = json.loads(raw)
+
+                        if isinstance(payload, list):
+                            records = payload
+                        elif isinstance(payload, dict):
+                            data = payload.get("data")
+                            records = (
+                                data
+                                if isinstance(data, list)
+                                else [payload]
+                            )
+                        else:
+                            continue
+
+                        for record in records:
+                            if isinstance(record, dict):
+                                CONTROLLER.process_tick(record)
+
+                    except Exception as exc:
+                        print(
+                            "[WS RECORD ERROR]",
+                            repr(exc),
+                        )
+
+        except Exception as exc:
+            print("[WS ERROR]", repr(exc))
+            await asyncio.sleep(2)
+
+
+def fmt_num(value: Any, digits: int = 2) -> str:
+    x = finite(value)
+    return "—" if x is None else f"{x:.{digits}f}"
+
+
+DASHBOARD_HTML = r"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>NIFTY Minute Simulations</title>
+<style>
+:root {
+    font-family: Inter, system-ui, sans-serif;
+    color-scheme: dark;
+}
+body {
+    margin: 0;
+    background: #0b1020;
+    color: #e9eef8;
+}
+header {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: #11192b;
+    border-bottom: 1px solid #283550;
+    padding: 16px 22px;
+}
+h1 {
+    margin: 0 0 14px;
+    font-size: 21px;
+}
+.tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+button {
+    border: 1px solid #3a4969;
+    background: #18233b;
+    color: #dfe7f5;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 700;
+    cursor: pointer;
+}
+button.active {
+    background: #315da8;
+    border-color: #4b7bc7;
+}
+button.now {
+    background: #1e7a52;
+    border-color: #2da46d;
+}
+main {
+    padding: 18px 22px 40px;
+}
+.status {
+    color: #9eabc4;
+    margin-bottom: 12px;
+}
+.cards {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(150px, 1fr));
+    gap: 12px;
+}
+.card, .panel {
+    background: #121a2d;
+    border: 1px solid #283550;
+    border-radius: 10px;
+    padding: 14px;
+}
+.panel {
+    margin-top: 14px;
+}
+.label {
+    color: #8fa0bd;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+.value {
+    font-size: 20px;
+    font-weight: 750;
+    margin-top: 5px;
+}
+.small {
+    font-size: 12px;
+    color: #9eabc4;
+}
+.grid4 {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+}
+canvas {
+    width: 100%;
+    height: 280px;
+    background: #0d1425;
+    border-radius: 8px;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+th, td {
+    padding: 7px;
+    border-bottom: 1px solid #283550;
+    text-align: right;
+}
+th:first-child, td:first-child {
+    text-align: left;
+}
+.reason {
+    margin-top: 10px;
+    color: #f4bf73;
+}
+@media (max-width: 900px) {
+    .cards, .grid4 {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+</style>
+</head>
+<body>
+<header>
+    <h1>NIFTY Independent Minute Simulations</h1>
+    <div class="tabs">
+        <button data-run="0916">09:16</button>
+        <button data-run="0917">09:17</button>
+        <button data-run="0918">09:18</button>
+        <button data-run="0919">09:19</button>
+        <button id="nowButton" class="now">START NOW</button>
+    </div>
+</header>
+
+<main>
+    <div id="status" class="status">CONNECTING...</div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="label">Spot</div>
+            <div id="spot" class="value">—</div>
+        </div>
+        <div class="card">
+            <div class="label">Future</div>
+            <div id="future" class="value">—</div>
+        </div>
+        <div class="card">
+            <div class="label">ATM</div>
+            <div id="atm" class="value">—</div>
+        </div>
+        <div class="card">
+            <div class="label">Total P&L</div>
+            <div id="totalPnl" class="value">0.0000</div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h3>Trade</h3>
+        <div class="cards">
+            <div>
+                <div class="label">Entry CE</div>
+                <div id="entryCe" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Entry PE</div>
+                <div id="entryPe" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Entry Straddle</div>
+                <div id="entryStraddle" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Trade Status</div>
+                <div id="tradeStatus" class="value">WAITING</div>
+            </div>
+        </div>
+        <div id="entryReason" class="reason"></div>
+    </div>
+
+    <div class="panel">
+        <h3>Greeks</h3>
+        <div class="grid4">
+            <div>
+                <div class="label">Delta</div>
+                <div id="delta" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Gamma</div>
+                <div id="gamma" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Theta</div>
+                <div id="theta" class="value">—</div>
+            </div>
+            <div>
+                <div class="label">Vega</div>
+                <div id="vega" class="value">—</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h3>P&L History</h3>
+        <canvas id="pnlChart" width="1400" height="280"></canvas>
+    </div>
+
+    <div class="panel">
+        <h3>Minute History</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Spot</th>
+                    <th>Future</th>
+                    <th>ATM</th>
+                    <th>Straddle</th>
+                    <th>Delta</th>
+                    <th>Gamma</th>
+                    <th>Hedge</th>
+                    <th>Total P&L</th>
+                </tr>
+            </thead>
+            <tbody id="history"></tbody>
+        </table>
+    </div>
+</main>
+
+<script>
+let activeRun = "0916";
+
+function fmt(v, digits=2) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toFixed(digits) : "—";
+}
+
+function setActive(runId) {
+    activeRun = runId;
+    document.querySelectorAll("[data-run]").forEach(btn => {
+        btn.classList.toggle(
+            "active",
+            btn.dataset.run === runId
+        );
+    });
+}
+
+function render(state) {
+    if (!state) return;
+
+    setActive(state.run_id);
+
+    const m = state.market || {};
+    const e = state.entry || {};
+    const p = state.position || {};
+    const g = state.greeks || {};
+    const h = state.history || [];
+
+    document.getElementById("spot").textContent =
+        fmt(m.spot);
+
+    document.getElementById("future").textContent =
+        fmt(m.future);
+
+    document.getElementById("atm").textContent =
+        fmt(m.atm);
+
+    document.getElementById("totalPnl").textContent =
+        fmt(
+            (state.pnl || {}).total,
+            4
+        );
+
+    document.getElementById("entryCe").textContent =
+        e.ce ? `${e.ce} @ ${fmt(e.ce_price, 2)}` : "—";
+
+    document.getElementById("entryPe").textContent =
+        e.pe ? `${e.pe} @ ${fmt(e.pe_price, 2)}` : "—";
+
+    document.getElementById("entryStraddle").textContent =
+        fmt(e.straddle, 2);
+
+    document.getElementById("tradeStatus").textContent =
+        p.active
+            ? "ACTIVE"
+            : state.completed
+                ? `EXITED: ${state.exit?.reason || "—"}`
+                : state.armed
+                    ? "ARMED"
+                    : "WAITING";
+
+    document.getElementById("entryReason").textContent =
+        state.entry_block_reason
+            ? `Entry block: ${state.entry_block_reason}`
+            : (
+                e.quote_source
+                    ? `Entry quote source: ${e.quote_source}`
+                    : ""
+            );
+
+    document.getElementById("delta").textContent =
+        fmt(g.delta, 6);
+
+    document.getElementById("gamma").textContent =
+        fmt(g.gamma, 6);
+
+    document.getElementById("theta").textContent =
+        fmt(g.theta, 6);
+
+    document.getElementById("vega").textContent =
+        fmt(g.vega, 6);
+
+    document.getElementById("status").textContent =
+        state.completed
+            ? `COMPLETED — ${state.exit?.reason || "EXIT"}`
+            : state.started
+                ? `LIVE — ${state.run_id}`
+                : state.armed
+                    ? `ARMED — ${state.run_id}`
+                    : `WAITING — ${state.run_id}`;
+
+    drawChart(h);
+    renderHistory(h);
+}
+
+function drawChart(history) {
+    const c = document.getElementById("pnlChart");
+    const ctx = c.getContext("2d");
+
+    ctx.clearRect(0, 0, c.width, c.height);
+
+    if (history.length < 2) return;
+
+    const values = history.map(
+        x => Number(x.total_pnl || 0)
+    );
+
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = Math.max(max - min, 1);
+
+    ctx.beginPath();
+
+    values.forEach((v, i) => {
+        const x =
+            20 +
+            i / (values.length - 1) *
+            (c.width - 40);
+
+        const y =
+            c.height - 20 -
+            (v - min) / range *
+            (c.height - 40);
+
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+
+    ctx.stroke();
+}
+
+function renderHistory(history) {
+    const body = document.getElementById("history");
+
+    body.innerHTML = history
+        .slice()
+        .reverse()
+        .map(x => `
+            <tr>
+                <td>${x.timestamp || "—"}</td>
+                <td>${fmt(x.spot)}</td>
+                <td>${fmt(x.future)}</td>
+                <td>${fmt(x.atm)}</td>
+                <td>${fmt(x.straddle)}</td>
+                <td>${fmt(x.delta, 6)}</td>
+                <td>${fmt(x.gamma, 6)}</td>
+                <td>${fmt(x.hedge, 4)}</td>
+                <td>${fmt(x.total_pnl, 4)}</td>
+            </tr>
+        `)
+        .join("");
+}
+
+async function refresh() {
+    try {
+        const r = await fetch(
+            `/api/runs/${activeRun}`,
+            {cache: "no-store"}
+        );
+
+        render(await r.json());
+
+    } catch (err) {
+        console.error(err);
+        document.getElementById("status").textContent =
+            "SERVER ERROR";
+    }
+}
+
+document.querySelectorAll("[data-run]").forEach(btn => {
+    btn.addEventListener("click", () => {
+        setActive(btn.dataset.run);
+        refresh();
+    });
+});
+
+document.getElementById("nowButton").addEventListener(
+    "click",
+    async () => {
+        const btn = document.getElementById("nowButton");
+        btn.disabled = true;
+        btn.textContent = "STARTING NOW...";
+
+        try {
+            const r = await fetch(
+                "/api/runs/NOW/start",
+                {cache: "no-store"}
+            );
+
+            const state = await r.json();
+            render(state);
+
+        } catch (err) {
+            console.error(err);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "START NOW";
+        }
+    }
+);
+
+setInterval(refresh, 1000);
+refresh();
+</script>
+</body>
+</html>
+"""
+
+
+class HTTPHandler(BaseHTTPRequestHandler):
+    def log_message(self, *_args) -> None:
+        return
+
+    def send_json(self, payload: dict, status: int = 200) -> None:
+        body = json.dumps(
+            payload,
+            default=str,
+            allow_nan=False,
+        ).encode("utf-8")
+
+        self.send_response(status)
+        self.send_header(
+            "Content-Type",
+            "application/json; charset=utf-8",
+        )
+        self.send_header(
+            "Cache-Control",
+            "no-store",
+        )
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*",
+        )
+        self.send_header(
+            "Content-Length",
+            str(len(body)),
+        )
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        path = self.path.split("?", 1)[0]
+
+        if path == "/":
+            body = DASHBOARD_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header(
+                "Content-Type",
+                "text/html; charset=utf-8",
+            )
+            self.send_header(
+                "Cache-Control",
+                "no-store",
+            )
+            self.send_header(
+                "Content-Length",
+                str(len(body)),
+            )
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/api/runs":
+            self.send_json({
+                "status": "SUCCESS",
+                "run_ids": list(RUN_IDS),
+                "runs": CONTROLLER.state(),
+            })
+            return
+
+        if path == "/api/runs/NOW/start":
+            self.send_json(
+                CONTROLLER.start_now()
+            )
+            return
+
+        if path.startswith("/api/runs/"):
+            run_id = path.rsplit("/", 1)[-1]
+            state = CONTROLLER.state(run_id)
+            if state is None:
+                self.send_json(
+                    {
+                        "status": "ERROR",
+                        "error": "Unknown simulation run",
+                        "run_id": run_id,
+                    },
+                    404,
+                )
+                return
+            self.send_json(state)
+            return
+
+        self.send_json(
+            {
+                "status": "ERROR",
+                "error": "Not found",
+            },
+            404,
+        )
+
+
+async def server_websocket_loop() -> None:
+    await ws_loop()
+
+
+def main() -> None:
+    print("=" * 72)
+    print("NIFTY CLEAN MINUTE SIMULATION SERVER")
+    print("=" * 72)
+    print(f"Feed : {WS_URI}")
+    print(f"HTTP : http://0.0.0.0:{HTTP_PORT}")
+    print("Runs : 09:16 / 09:17 / 09:18 / 09:19 / NOW")
+    print(
+        f"Quote policy : "
+        f"{'LTP fallback enabled' if USE_LTP_FALLBACK else 'strict bid/ask'}"
+    )
+    print("=" * 72)
+
+    thread = threading.Thread(
+        target=lambda: asyncio.run(
+            server_websocket_loop()
+        ),
+        daemon=True,
+        name="market-websocket",
+    )
+    thread.start()
+
+    server = ThreadingHTTPServer(
+        (HTTP_HOST, HTTP_PORT),
+        HTTPHandler,
+    )
+
+    print(
+        f"[HTTP] Listening on {HTTP_HOST}:{HTTP_PORT}"
+    )
+
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

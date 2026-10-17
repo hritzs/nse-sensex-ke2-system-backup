@@ -1,0 +1,11 @@
+config/IndexTokens.csv filter=lfs diff=lfs merge=lfs -text
+shared/GreekTokens.csv filter=lfs diff=lfs merge=lfs -text
+shared/GreekTokens.csv.before_network_sync filter=lfs diff=lfs merge=lfs -text
+
+# System backup: large market files use Git LFS
+"backups/completion_before_changes/20261016-102550/shared/GreekTokens.csv" filter=lfs diff=lfs merge=lfs -text
+"backups/master_refresh/20261016-114018/GreekTokens.csv" filter=lfs diff=lfs merge=lfs -text
+"config/IndexTokens.csv" filter=lfs diff=lfs merge=lfs -text
+"shared/GreekTokens.csv" filter=lfs diff=lfs merge=lfs -text
+"shared/GreekTokens.csv.backup_before_20260908_update_20260908_054747" filter=lfs diff=lfs merge=lfs -text
+"shared/GreekTokens.csv.before_network_sync" filter=lfs diff=lfs merge=lfs -text

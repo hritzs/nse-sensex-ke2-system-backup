@@ -1,0 +1,226 @@
+{
+  "spec": "KE2 web simulator - data needed from the NSE feed infra",
+  "version": "1.0 (14-Oct-2026)",
+  "notes": [
+    "The simulator computes its own IVs / deltas from PRICES (running DTE, r = 0, stock options vs their future, NIFTY vs the synthetic future) so code, sim and backtest stay identical. Feed IV / greeks are welcome as extra fields for cross-checks, not used for decisions.",
+    "All times IST, ISO-8601 with milliseconds. Prices in rupees (not paise).",
+    "One expiry per cycle: the monthly expiry the book is built on (e.g. 27-Oct-2026). No next-month instruments needed.",
+    "Market data only: the web simulator is a standalone replacement for the Excel simulation (same rules, simulated fills); it does not read or mirror live orders."
+  ],
+  "1_subscription_request": {
+    "description": "Simulator -> feed. Sent at BOD and again whenever strikes change (build, roll, replacement, wing roll). Feed answers with a snapshot of every instrument, then streams updates.",
+    "example": {
+      "type": "subscribe",
+      "request_id": "bod-20261014",
+      "expiry": "2026-10-27",
+      "underlyings": [
+        {
+          "symbol": "RELIANCE",
+          "segment": "FO_STK",
+          "future": true,
+          "options": {
+            "mode": "around_future",
+            "strikes_each_side": 6,
+            "types": [
+              "CE",
+              "PE"
+            ]
+          },
+          "extra_strikes": [
+            1300
+          ]
+        },
+        {
+          "symbol": "NIFTY",
+          "segment": "FO_IDX",
+          "future": true,
+          "options": {
+            "mode": "around_future",
+            "strikes_each_side": 30,
+            "step": 50,
+            "types": [
+              "CE",
+              "PE"
+            ]
+          },
+          "extra_strikes": [
+            23150,
+            22350
+          ]
+        }
+      ]
+    },
+    "why": {
+      "stock strikes_each_side 6": "10 nearest strikes for the OI x strike >= 5 cr rule (build at 15:05, rolls, replacements) + the held strike",
+      "NIFTY strikes_each_side 30": "0.20 / 0.25 delta wing pick + ATM strike for the synthetic future and NIFTY ATM IV",
+      "extra_strikes": "held legs, always streamed even if the future moves away"
+    },
+    "unsubscribe_example": {
+      "type": "unsubscribe",
+      "instrument_ids": [
+        12345,
+        12346
+      ]
+    }
+  },
+  "2_instrument_master": {
+    "description": "Feed -> simulator, once per day before 09:00 (and on request). Static data for every subscribable F&O instrument of the expiry.",
+    "example": [
+      {
+        "instrument_id": 12345,
+        "name": "RELIANCE1300CE27Oct2026",
+        "symbol": "RELIANCE",
+        "instrument_type": "OPTSTK",
+        "expiry": "2026-10-27",
+        "strike": 1300.0,
+        "option_type": "CE",
+        "lot_size": 500,
+        "tick_size": 0.05
+      },
+      {
+        "instrument_id": 12001,
+        "name": "RELIANCE27Oct2026FUT",
+        "symbol": "RELIANCE",
+        "instrument_type": "FUTSTK",
+        "expiry": "2026-10-27",
+        "strike": null,
+        "option_type": null,
+        "lot_size": 500,
+        "tick_size": 0.1
+      }
+    ],
+    "required_fields": [
+      "instrument_id",
+      "symbol",
+      "instrument_type",
+      "expiry",
+      "strike",
+      "option_type",
+      "lot_size",
+      "tick_size"
+    ]
+  },
+  "3_market_update": {
+    "description": "Feed -> simulator, streamed on every change (or conflated to max 1 per second per instrument). One message can carry many instruments.",
+    "example": {
+      "type": "quote",
+      "exchange_ts": "2026-10-14T10:00:03.250+05:30",
+      "data": [
+        {
+          "instrument_id": 12345,
+          "ltp": 18.45,
+          "ltq": 500,
+          "last_trade_ts": "2026-10-14T10:00:02.900+05:30",
+          "bid": 18.4,
+          "bid_qty": 3000,
+          "ask": 18.55,
+          "ask_qty": 2500,
+          "volume": 1250000,
+          "oi": 4820000,
+          "feed_iv": 0.2731,
+          "feed_delta": 0.48
+        }
+      ]
+    },
+    "required_fields": {
+      "ltp": "marks, IV, PnL (LTP basis)",
+      "bid / ask": "simulated fills (sell at bid, buy at ask, as the Excel sim) and the synthetic NIFTY future (ATM + CE ask - PE ask)",
+      "oi": "strike rule OI x strike >= 5 cr (either leg) at build / roll / replacement",
+      "exchange_ts / last_trade_ts": "minute bars (last tick of minute m = bar m+1), stale-price checks",
+      "volume": "traded / not-traded flag for the EOD mark"
+    },
+    "optional_fields": [
+      "ltq",
+      "bid_qty",
+      "ask_qty",
+      "feed_iv",
+      "feed_delta",
+      "open",
+      "high",
+      "low",
+      "prev_close"
+    ]
+  },
+  "4_minute_bar": {
+    "description": "Optional but preferred: feed (or a small aggregator) emits a bar per instrument at each minute end, built as last tick of minute m = bar labelled m+1 (same rule as the tick-by-tick backtest). The simulator's checkpoints, 5-minute IV-exit median, roll checks and logs run on these.",
+    "example": {
+      "type": "bar_1m",
+      "bar_time": "2026-10-14T10:01:00+05:30",
+      "data": [
+        {
+          "instrument_id": 12345,
+          "close": 18.45,
+          "bid": 18.4,
+          "ask": 18.55,
+          "oi": 4820000,
+          "volume_in_bar": 15000,
+          "ticks_in_bar": 42
+        }
+      ]
+    }
+  },
+  "5_end_of_day": {
+    "description": "Feed / file -> simulator after the close (NSE bhavcopy equivalent). Used for BOD rebase, carry, IV mark (down-only), r0', opening-hedge alignment, wing IV decision, replacement ranking.",
+    "example": {
+      "type": "eod",
+      "trade_date": "2026-10-13",
+      "data": [
+        {
+          "instrument_id": 12345,
+          "close": 18.1,
+          "settle": 18.1,
+          "oi": 4790000,
+          "contracts": 2410,
+          "value_lakh": 2134.5
+        }
+      ]
+    },
+    "required_fields": [
+      "close",
+      "oi",
+      "contracts",
+      "value_lakh"
+    ],
+    "why_value_lakh": "universe = top 80 by option traded value over the 14-day window before the build"
+  },
+  "6_reference_daily": {
+    "description": "Feed / file -> simulator, each morning (and intraday when they change).",
+    "fo_ban_list": {
+      "date": "2026-10-14",
+      "symbols": [
+        "SAMPLESYM"
+      ]
+    },
+    "results_intimations": [
+      {
+        "symbol": "LT",
+        "result_date": "2026-10-27",
+        "announced_at": "2026-10-13T18:15:00+05:30"
+      }
+    ],
+    "trading_holidays": [
+      "2026-10-20",
+      "2026-11-10"
+    ],
+    "session": {
+      "open": "09:15",
+      "close": "15:40",
+      "pre_open": "09:00"
+    },
+    "why": {
+      "fo_ban_list": "ban exit (square off at the last checkpoint before the ban day), replacement filter",
+      "results_intimations": "earnings exit at the first checkpoint after an intimation; build / replacement exclusion (results up to the expiry day)",
+      "trading_holidays": "DTE, exit day, replacement window"
+    }
+  },
+  "7_transport": {
+    "recommended": "WebSocket (JSON messages above) from the feed infra to the simulator backend; the backend serves the browser over its own WebSocket / REST.",
+    "rates": "quotes conflated to <= 1 per second per instrument is enough; ~50 stocks x ~13 contracts + NIFTY ~120 contracts = ~800 instruments",
+    "heartbeat": {
+      "type": "heartbeat",
+      "ts": "2026-10-14T10:00:05+05:30",
+      "feed_status": "OK"
+    },
+    "recovery": "on reconnect the feed re-sends a full snapshot of all subscribed instruments (same 'quote' message, flag \"snapshot\": true)"
+  }
+}

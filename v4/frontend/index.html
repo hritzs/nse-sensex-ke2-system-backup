@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NIFTY Minute Straddle Simulation</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <div class="title-row">
+          <h1>NIFTY Minute Straddle Simulation</h1>
+          <span id="connectionBadge" class="badge muted">CONNECTING</span>
+        </div>
+        <div class="subtitle">09:15–15:40 IST · frozen position strike · live market reference</div>
+      </div>
+      <div class="clock" id="clock">--:--:--</div>
+    </header>
+
+    <section class="toolbar card">
+      <div class="run-tabs" id="runTabs"></div>
+      <div class="toolbar-spacer"></div>
+      <label class="control-label">Expiry</label>
+      <select id="expirySelect"></select>
+      <button id="confirmExpiry" class="button">Confirm Expiry</button>
+      <button id="startNow" class="button primary">START NOW</button>
+      <button id="clearRun" class="button danger">Clear DB (active tab)</button>
+      <span id="expiryBadge" class="expiry-badge">ACTIVE EXPIRY: --</span>
+    </section>
+
+    <main>
+      <section class="grid market-grid">
+        <div class="metric card"><span>LIVE STATUS</span><strong id="statusValue">--</strong></div>
+        <div class="metric card"><span>SYNTHETIC SPOT</span><strong id="spotValue">--</strong></div>
+        <div class="metric card"><span>MARKET ATM</span><strong id="marketAtmValue">--</strong></div>
+        <div class="metric card"><span>MARKET ATM STRADDLE</span><strong id="marketStraddleValue">--</strong></div>
+        <div class="metric card"><span>POSITION STRIKE</span><strong id="positionStrikeValue">--</strong></div>
+        <div class="metric card"><span>POSITION STRADDLE</span><strong id="positionStraddleValue">--</strong></div>
+        <div class="metric card"><span>MIN STRADDLE</span><strong id="minStraddleValue">--</strong></div>
+        <div class="metric card"><span>MAX STRADDLE</span><strong id="maxStraddleValue">--</strong></div>
+      </section>
+
+      <section class="section grid two">
+        <div class="card panel">
+          <div class="panel-title">Entry vs Current</div>
+          <div class="data-grid">
+            <div class="kv"><span>CE Entry</span><strong id="entryCe">--</strong></div>
+            <div class="kv"><span>PE Entry</span><strong id="entryPe">--</strong></div>
+            <div class="kv"><span>Entry Straddle</span><strong id="entryStraddle">--</strong></div>
+            <div class="kv"><span>Current CE</span><strong id="currentCe">--</strong></div>
+            <div class="kv"><span>Current PE</span><strong id="currentPe">--</strong></div>
+            <div class="kv"><span>Quote Source</span><strong id="quoteSource">--</strong></div>
+            <div class="kv"><span>Entry Time</span><strong id="entryTime">--</strong></div>
+            <div class="kv"><span>Entry Expiry</span><strong id="entryExpiry">--</strong></div>
+          </div>
+        </div>
+
+        <div class="card panel">
+          <div class="panel-title">P&amp;L</div>
+          <div class="pnl-grid">
+            <div class="pnl positive-neutral"><span>OPTION</span><strong id="optionPnl">--</strong></div>
+            <div class="pnl positive-neutral"><span>SYNTHETIC HEDGE</span><strong id="futurePnl">--</strong></div>
+            <div class="pnl total"><span>TOTAL</span><strong id="totalPnl">--</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section grid two">
+        <div class="card panel">
+          <div class="panel-heading-row">
+            <div class="panel-title">Greeks</div>
+            <label class="size-control">Size
+              <input id="greekSize" type="number" min="1" step="1" value="1">
+            </label>
+          </div>
+          <div class="greek-grid">
+            <div class="greek-card"><span>DELTA</span><strong id="delta">--</strong><small id="deltaRaw">1 Qty = --</small></div>
+            <div class="greek-card"><span>GAMMA</span><strong id="gamma">--</strong><small id="gammaRaw">1 Qty = --</small></div>
+            <div class="greek-card"><span>THETA</span><strong id="theta">--</strong><small id="thetaRaw">1 Qty = --</small></div>
+            <div class="greek-card"><span>VEGA</span><strong id="vega">--</strong><small id="vegaRaw">1 Qty = --</small></div>
+          </div>
+          <div class="note">Primary value = selected Size × 1 Qty Greek. Backend Greeks remain unscaled.</div>
+        </div>
+
+        <div class="card panel">
+          <div class="panel-title">Hedge / Risk</div>
+          <div class="data-grid">
+            <div class="kv"><span>Hedge</span><strong id="hedge">--</strong></div>
+            <div class="kv"><span>Hedge Target</span><strong id="hedgeTarget">--</strong></div>
+            <div class="kv"><span>Points Out</span><strong id="pointsOut">--</strong></div>
+            <div class="kv"><span>Points Allowed</span><strong id="pointsAllowed">--</strong></div>
+            <div class="kv"><span>TP</span><strong id="tpPoints">--</strong></div>
+            <div class="kv"><span>TP BPS</span><strong id="tpBps">--</strong></div>
+            <div class="kv"><span>SL Limit</span><strong id="slPoints">--</strong></div>
+            <div class="kv"><span>RTV</span><strong id="rtvValue">--</strong></div>
+            <div class="kv"><span>RTV Limit</span><strong id="rtvThreshold">--</strong></div>
+            <div class="kv"><span>IV Drop</span><strong id="ivDrop">10.00%</strong></div>
+            <div class="kv"><span>OTM IV</span><strong id="otmIv">--</strong></div>
+            <div class="kv"><span>Exit</span><strong id="exitReason">RUNNING</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section card panel">
+        <div class="panel-title">Hedge Events</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Timestamp</th><th>Type</th><th>Old Hedge</th><th>New Hedge</th><th>Change</th><th>Delta</th><th>Points Out</th><th>Allowed</th><th>Synthetic</th></tr></thead>
+            <tbody id="hedgeEvents"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section card panel">
+        <div class="panel-heading-row">
+          <div>
+            <div class="panel-title">P&amp;L History · 1-Minute Snapshots</div>
+            <div class="note">Min / Max = live Market ATM straddle extrema. Completed runs remain financially frozen.</div>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="pnlChart"></canvas></div>
+        <div class="table-wrap history-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Synthetic</th><th>ATM</th><th>CE</th><th>PE</th><th>Straddle</th><th>Net Delta</th><th>Total P&amp;L</th></tr></thead>
+            <tbody id="history"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "instruments": 85540,
+  "near_term_nifty_expiries": [
+    "2026-10-19",
+    "2026-10-27",
+    "2026-11-03",
+    "2026-11-09",
+    "2026-11-17",
+    "2026-11-23"
+  ],
+  "sha256": "d65d59c80579e98bc14105ae3012d6feabc4a6c8f575d89d16f15fc9e2c43131",
+  "excluded_rows": [
+    {
+      "symbol": "PAGEIND",
+      "token": "1e+05",
+      "reason": "nondecimal_identifier"
+    }
+  ],
+  "source": "/home/administrator/projects/nse-fo-low-latency-decoder/data/reference_import/GreekTokens.csv",
+  "checked_at": "2026-10-16T17:10:18.701679+05:30",
+  "previous_master_backup": "/home/administrator/projects/nse-fo-low-latency-decoder/backups/master_refresh/20261016-114018",
+  "restart_required": "decoder, KE2 adapter, Gamma and indicative load at startup",
+  "authoritative_share": "\\\\172.16.1.85\\Shared\\GreekTokens.csv"
+}

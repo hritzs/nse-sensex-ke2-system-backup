@@ -1,0 +1,18 @@
+FROM continuumio/miniconda3:latest
+
+# Install the official free version of kdb+ from the Kx Conda channel
+RUN conda install -y -c kx kdb
+
+# Hardcode QHOME so interactive terminals know where kdb+ is installed
+ENV QHOME=/opt/conda/q
+
+# Tell kdb+ to look for the kc.lic license file in our mapped volume
+ENV QLIC=/q_scripts
+
+# Expose the default IPC port
+EXPOSE 5000
+
+WORKDIR /q_scripts
+
+# Start the q process listening on port 5000
+CMD ["q", "-p", "5000"]

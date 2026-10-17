@@ -1,0 +1,881 @@
+#include <arpa/inet.h>
+#include <cerrno>
+#include <chrono>
+#include <csignal>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <lzo/lzo1z.h>
+#include <netinet/in.h>
+#include <sstream>
+#include <string>
+#include <sys/socket.h>
+#include <thread>
+#include <unistd.h>
+#include <vector>
+
+namespace
+{
+    constexpr const char* MULTICAST_IP = "233.1.2.5";
+    constexpr int MULTICAST_PORT = 34330;
+    constexpr const char* HTTP_BIND = "0.0.0.0";
+    constexpr int HTTP_PORT = 8100;
+
+    constexpr uint16_t TX_INDICATIVE_INDICES = 8207;
+
+    constexpr size_t MAX_PACKET = 4096;
+    constexpr size_t MAX_DECOMPRESSED = 65536;
+
+    volatile std::sig_atomic_t g_running = 1;
+
+    struct IcState
+    {
+        bool seen = false;
+        std::string index_name;
+
+        double indicative_close = 0.0;
+        double percent_change = 0.0;
+        double change = 0.0;
+
+        uint64_t packets_received = 0;
+        uint64_t packets_dropped = 0;
+        uint64_t tx_8207_seen = 0;
+        uint64_t records_seen = 0;
+
+        std::string last_update;
+    };
+
+    IcState g_state;
+    std::mutex g_state_mtx;
+
+    static void signal_handler(int)
+    {
+        g_running = 0;
+    }
+
+    static inline uint16_t be16(const uint8_t* p)
+    {
+        return static_cast<uint16_t>(
+            (static_cast<uint16_t>(p[0]) << 8) |
+            static_cast<uint16_t>(p[1])
+        );
+    }
+
+    static inline uint32_t be32(const uint8_t* p)
+    {
+        return
+            (static_cast<uint32_t>(p[0]) << 24) |
+            (static_cast<uint32_t>(p[1]) << 16) |
+            (static_cast<uint32_t>(p[2]) << 8)  |
+            static_cast<uint32_t>(p[3]);
+    }
+
+    static std::string now_ist()
+    {
+        using namespace std::chrono;
+
+        const auto now = system_clock::now();
+        const std::time_t tt = system_clock::to_time_t(now);
+
+        std::tm tm{};
+        localtime_r(&tt, &tm);
+
+        const auto ms =
+            duration_cast<milliseconds>(
+                now.time_since_epoch()
+            ) % 1000;
+
+        std::ostringstream ss;
+        ss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%S")
+           << '.'
+           << std::setw(3)
+           << std::setfill('0')
+           << ms.count()
+           << "+05:30";
+
+        return ss.str();
+    }
+
+    static bool decompress_lzo(
+        const uint8_t* in,
+        size_t inlen,
+        std::vector<uint8_t>& out)
+    {
+        static bool initialized = false;
+
+        if (!initialized)
+        {
+            if (lzo_init() != LZO_E_OK)
+                return false;
+
+            initialized = true;
+        }
+
+        out.resize(MAX_DECOMPRESSED);
+        lzo_uint out_len = static_cast<lzo_uint>(out.size());
+
+        const int rc =
+            lzo1z_decompress(
+                in,
+                static_cast<lzo_uint>(inlen),
+                out.data(),
+                &out_len,
+                nullptr
+            );
+
+        if (rc != LZO_E_OK)
+            return false;
+
+        out.resize(static_cast<size_t>(out_len));
+        return true;
+    }
+
+    static std::string json_escape(const std::string& s)
+    {
+        std::string out;
+        out.reserve(s.size() + 8);
+
+        for (char c : s)
+        {
+            switch (c)
+            {
+                case '"':  out += "\\\""; break;
+                case '\\': out += "\\\\"; break;
+                case '\n': out += "\\n"; break;
+                case '\r': out += "\\r"; break;
+                case '\t': out += "\\t"; break;
+                default:   out += c; break;
+            }
+        }
+
+        return out;
+    }
+
+    static void update_record(
+        const uint8_t* rec)
+    {
+        char name_buf[22]{};
+        std::memcpy(name_buf, rec + 0, 21);
+
+        std::string index_name(name_buf);
+        while (!index_name.empty() &&
+               (index_name.back() == '\0' ||
+                index_name.back() == ' '))
+        {
+            index_name.pop_back();
+        }
+
+        /*
+         * NSE protocol:
+         *
+         * INDICATIVE INDICES record = 71 bytes
+         *
+         * +0  IndexName                21
+         * +21 IndicativeCloseValue     4
+         * +25 Reserved                4
+         * +29 Reserved                4
+         * +33 Reserved                4
+         * +37 ClosingIndex             4
+         * +41 PercentChange            4
+         * +45 Reserved                4
+         * +49 Reserved                4
+         * +53 Change                   4
+         * +57 Reserved                4
+         * +61 MarketCapitalization     8
+         * +69 NetChangeIndicator        1
+         * +70 FILLER                   1
+         *
+         * LONG values are represented using the
+         * same big-endian convention used by the
+         * current NSE decoder.
+         *
+         * Index values are published on a 100x
+         * fixed-point basis for display.
+         */
+        const double indicative_close =
+            static_cast<double>(be32(rec + 21)) / 100.0;
+
+        const double percent_change =
+            static_cast<double>(be32(rec + 41)) / 100.0;
+
+        const double change =
+            static_cast<double>(be32(rec + 53)) / 100.0;
+
+        {
+            std::lock_guard<std::mutex> lock(g_state_mtx);
+
+            g_state.records_seen++;
+
+            /*
+             * NIFTY is the target record.
+             * Keep the first NIFTY record regardless
+             * of what other indices are carried.
+             */
+            if (index_name == "NIFTY")
+            {
+                g_state.seen = true;
+                g_state.index_name = index_name;
+                g_state.indicative_close = indicative_close;
+                g_state.percent_change = percent_change;
+                g_state.change = change;
+                g_state.last_update = now_ist();
+            }
+        }
+
+        std::cout
+            << "[8207]"
+            << " index=" << index_name
+            << " indicative_close=" << indicative_close
+            << " change=" << change
+            << " pct=" << percent_change
+            << std::endl;
+    }
+
+    static void parse_decompressed(
+        const uint8_t* dec,
+        size_t dec_len)
+    {
+        if (dec_len <= 18)
+            return;
+
+        /*
+         * Match existing decoder:
+         *
+         * const uint8_t* b = dec.data() + 8;
+         * size_t blen = dec.size() - 8;
+         */
+        const uint8_t* b = dec + 8;
+        const size_t blen = dec_len - 8;
+
+        if (blen < 12)
+            return;
+
+        const uint16_t tx = be16(b + 10);
+
+        if (tx != TX_INDICATIVE_INDICES)
+            return;
+
+        if (blen < 42)
+            return;
+
+        const uint16_t records = be16(b + 40);
+
+        if (records == 0 || records > 6)
+            return;
+
+        constexpr size_t HEADER = 40;
+        constexpr size_t COUNT = 2;
+        constexpr size_t RECORD = 71;
+
+        const size_t start = HEADER + COUNT;
+
+        if (start + static_cast<size_t>(records) * RECORD > blen)
+            return;
+
+        {
+            std::lock_guard<std::mutex> lock(g_state_mtx);
+            g_state.tx_8207_seen++;
+        }
+
+        for (uint16_t i = 0; i < records; ++i)
+        {
+            update_record(
+                b + start +
+                static_cast<size_t>(i) * RECORD
+            );
+        }
+    }
+
+    static void process_udp_packet(
+        const uint8_t* buf,
+        size_t len)
+    {
+        /*
+         * Existing NSE framing:
+         *
+         * +0  : 2 bytes outer field
+         * +2  : number of compressed messages
+         * +4  : first compressed-message length
+         * ...
+         */
+        if (len < 4)
+            return;
+
+        const uint16_t packets = be16(buf + 2);
+
+        if (packets == 0 || packets > 50)
+            return;
+
+        size_t pos = 4;
+
+        for (uint16_t i = 0; i < packets; ++i)
+        {
+            if (pos + 2 > len)
+                return;
+
+            const uint16_t comp = be16(buf + pos);
+            pos += 2;
+
+            if (comp == 0 || comp > 2048)
+                return;
+
+            if (pos + comp > len)
+                return;
+
+            std::vector<uint8_t> decompressed;
+
+            if (decompress_lzo(
+                    buf + pos,
+                    comp,
+                    decompressed))
+            {
+                parse_decompressed(
+                    decompressed.data(),
+                    decompressed.size());
+            }
+
+            pos += comp;
+        }
+    }
+
+    static bool setup_multicast_socket()
+    {
+        const int sock =
+            socket(AF_INET, SOCK_DGRAM, 0);
+
+        if (sock < 0)
+        {
+            std::cerr
+                << "[ICP] socket() failed: "
+                << std::strerror(errno)
+                << std::endl;
+
+            return false;
+        }
+
+        int reuse = 1;
+
+        if (setsockopt(
+                sock,
+                SOL_SOCKET,
+                SO_REUSEADDR,
+                &reuse,
+                sizeof(reuse)) < 0)
+        {
+            std::cerr
+                << "[ICP] SO_REUSEADDR failed: "
+                << std::strerror(errno)
+                << std::endl;
+
+            close(sock);
+            return false;
+        }
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(MULTICAST_PORT);
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+        if (bind(
+                sock,
+                reinterpret_cast<sockaddr*>(&addr),
+                sizeof(addr)) < 0)
+        {
+            std::cerr
+                << "[ICP] bind failed: "
+                << std::strerror(errno)
+                << std::endl;
+
+            close(sock);
+            return false;
+        }
+
+        ip_mreq mreq{};
+        mreq.imr_multiaddr.s_addr =
+            inet_addr(MULTICAST_IP);
+        mreq.imr_interface.s_addr =
+            inet_addr("0.0.0.0");
+
+        if (setsockopt(
+                sock,
+                IPPROTO_IP,
+                IP_ADD_MEMBERSHIP,
+                &mreq,
+                sizeof(mreq)) < 0)
+        {
+            std::cerr
+                << "[ICP] multicast join failed: "
+                << std::strerror(errno)
+                << std::endl;
+
+            close(sock);
+            return false;
+        }
+
+        std::cout
+            << "[ICP] multicast joined "
+            << MULTICAST_IP
+            << ":"
+            << MULTICAST_PORT
+            << std::endl;
+
+        std::vector<uint8_t> buf(MAX_PACKET);
+
+        while (g_running)
+        {
+            const ssize_t n =
+                recv(sock, buf.data(), buf.size(), 0);
+
+            if (n < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+
+                if (errno == EAGAIN ||
+                    errno == EWOULDBLOCK)
+                    continue;
+
+                std::cerr
+                    << "[ICP] recv failed: "
+                    << std::strerror(errno)
+                    << std::endl;
+
+                continue;
+            }
+
+            if (n <= 0)
+                continue;
+
+            {
+                std::lock_guard<std::mutex> lock(g_state_mtx);
+                g_state.packets_received++;
+            }
+
+            process_udp_packet(
+                buf.data(),
+                static_cast<size_t>(n));
+        }
+
+        close(sock);
+        return true;
+    }
+
+    static std::string make_state_json()
+    {
+        IcState s;
+
+        {
+            std::lock_guard<std::mutex> lock(g_state_mtx);
+            s = g_state;
+        }
+
+        std::ostringstream out;
+
+        out << "{"
+            << "\"ok\":true,"
+            << "\"seen\":" << (s.seen ? "true" : "false") << ","
+            << "\"index\":\"" << json_escape(s.index_name) << "\","
+            << "\"indicative_close\":";
+
+        if (s.seen)
+            out << std::fixed << std::setprecision(2)
+                << s.indicative_close;
+        else
+            out << "null";
+
+        out << ",\"change\":";
+
+        if (s.seen)
+            out << std::fixed << std::setprecision(2)
+                << s.change;
+        else
+            out << "null";
+
+        out << ",\"percent_change\":";
+
+        if (s.seen)
+            out << std::fixed << std::setprecision(2)
+                << s.percent_change;
+        else
+            out << "null";
+
+        out << ",\"last_update\":";
+
+        if (s.seen)
+            out << "\""
+                << json_escape(s.last_update)
+                << "\"";
+        else
+            out << "null";
+
+        out << ",\"packets_received\":"
+            << s.packets_received
+            << ",\"packets_dropped\":"
+            << s.packets_dropped
+            << ",\"tx_8207_seen\":"
+            << s.tx_8207_seen
+            << ",\"records_seen\":"
+            << s.records_seen
+            << "}";
+
+        return out.str();
+    }
+
+    static const char* HTML = R"HTML(
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NIFTY Indicative Close</title>
+<style>
+body {
+    margin: 0;
+    background: #0b0f14;
+    color: #e8edf2;
+    font-family: Arial, sans-serif;
+}
+.wrap {
+    max-width: 900px;
+    margin: 60px auto;
+    padding: 24px;
+}
+.card {
+    background: #121821;
+    border: 1px solid #283241;
+    border-radius: 16px;
+    padding: 32px;
+}
+.label {
+    color: #8d99a8;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.price {
+    font-size: 64px;
+    font-weight: 700;
+    margin: 10px 0 28px;
+}
+.row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+}
+.box {
+    background: #0d131b;
+    border-radius: 12px;
+    padding: 18px;
+}
+.value {
+    font-size: 26px;
+    margin-top: 8px;
+}
+.status {
+    margin-top: 28px;
+    color: #9aa8b8;
+    font-size: 13px;
+}
+.waiting {
+    color: #d0a94a;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+    <div class="card">
+        <div class="label">NIFTY</div>
+        <div class="label">Indicative Closing Price</div>
+        <div id="price" class="price">Waiting…</div>
+
+        <div class="row">
+            <div class="box">
+                <div class="label">Change</div>
+                <div id="change" class="value">—</div>
+            </div>
+
+            <div class="box">
+                <div class="label">Change %</div>
+                <div id="pct" class="value">—</div>
+            </div>
+
+            <div class="box">
+                <div class="label">Last Update</div>
+                <div id="updated" class="value" style="font-size:18px">—</div>
+            </div>
+        </div>
+
+        <div id="status" class="status waiting">
+            Waiting for NSE 8207 indicative-index broadcast.
+        </div>
+    </div>
+</div>
+
+<script>
+async function refresh() {
+    try {
+        const r = await fetch('/api/icp', {cache:'no-store'});
+        const d = await r.json();
+
+        const price = document.getElementById('price');
+        const change = document.getElementById('change');
+        const pct = document.getElementById('pct');
+        const updated = document.getElementById('updated');
+        const status = document.getElementById('status');
+
+        if (!d.seen) {
+            price.textContent = 'Waiting…';
+            change.textContent = '—';
+            pct.textContent = '—';
+            updated.textContent = '—';
+            status.textContent =
+                'Waiting for NSE 8207 indicative-index broadcast.';
+            return;
+        }
+
+        price.textContent =
+            Number(d.indicative_close).toLocaleString(
+                'en-IN',
+                {minimumFractionDigits:2, maximumFractionDigits:2}
+            );
+
+        change.textContent =
+            Number(d.change).toFixed(2);
+
+        pct.textContent =
+            Number(d.percent_change).toFixed(2) + '%';
+
+        updated.textContent =
+            d.last_update || '—';
+
+        status.classList.remove('waiting');
+        status.textContent =
+            'Live NSE indicative close received.';
+    } catch (e) {
+        document.getElementById('status').textContent =
+            'Server connection error.';
+    }
+}
+
+refresh();
+setInterval(refresh, 250);
+</script>
+</body>
+</html>
+)HTML";
+
+    static void send_http_response(
+        int client,
+        int status,
+        const char* content_type,
+        const std::string& body)
+    {
+        const char* status_text =
+            status == 200 ? "OK" :
+            status == 404 ? "Not Found" :
+            "Internal Server Error";
+
+        std::ostringstream out;
+
+        out << "HTTP/1.1 "
+            << status
+            << ' '
+            << status_text
+            << "\r\n"
+            << "Content-Type: "
+            << content_type
+            << "\r\n"
+            << "Cache-Control: no-store\r\n"
+            << "Access-Control-Allow-Origin: *\r\n"
+            << "Content-Length: "
+            << body.size()
+            << "\r\n"
+            << "Connection: close\r\n"
+            << "\r\n"
+            << body;
+
+        const std::string response = out.str();
+
+        send(
+            client,
+            response.data(),
+            response.size(),
+            0);
+    }
+
+    static void http_server()
+    {
+        const int server =
+            socket(AF_INET, SOCK_STREAM, 0);
+
+        if (server < 0)
+        {
+            std::cerr
+                << "[HTTP] socket failed: "
+                << std::strerror(errno)
+                << std::endl;
+            return;
+        }
+
+        int reuse = 1;
+
+        setsockopt(
+            server,
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            &reuse,
+            sizeof(reuse));
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(HTTP_PORT);
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+        if (bind(
+                server,
+                reinterpret_cast<sockaddr*>(&addr),
+                sizeof(addr)) < 0)
+        {
+            std::cerr
+                << "[HTTP] bind failed: "
+                << std::strerror(errno)
+                << std::endl;
+
+            close(server);
+            return;
+        }
+
+        if (listen(server, 32) < 0)
+        {
+            std::cerr
+                << "[HTTP] listen failed: "
+                << std::strerror(errno)
+                << std::endl;
+
+            close(server);
+            return;
+        }
+
+        std::cout
+            << "[HTTP] listening on 0.0.0.0:"
+            << HTTP_PORT
+            << std::endl;
+
+        while (g_running)
+        {
+            sockaddr_in client_addr{};
+            socklen_t client_len =
+                sizeof(client_addr);
+
+            const int client =
+                accept(
+                    server,
+                    reinterpret_cast<sockaddr*>(&client_addr),
+                    &client_len);
+
+            if (client < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+
+                continue;
+            }
+
+            char request[4096]{};
+
+            const ssize_t n =
+                recv(
+                    client,
+                    request,
+                    sizeof(request) - 1,
+                    0);
+
+            if (n <= 0)
+            {
+                close(client);
+                continue;
+            }
+
+            std::string req(
+                request,
+                static_cast<size_t>(n));
+
+            if (req.rfind("GET /api/icp ", 0) == 0)
+            {
+                const std::string body =
+                    make_state_json();
+
+                send_http_response(
+                    client,
+                    200,
+                    "application/json",
+                    body);
+            }
+            else if (req.rfind("GET /health ", 0) == 0)
+            {
+                send_http_response(
+                    client,
+                    200,
+                    "application/json",
+                    "{\"ok\":true}");
+            }
+            else if (req.rfind("GET / ", 0) == 0)
+            {
+                send_http_response(
+                    client,
+                    200,
+                    "text/html; charset=utf-8",
+                    HTML);
+            }
+            else
+            {
+                send_http_response(
+                    client,
+                    404,
+                    "application/json",
+                    "{\"error\":\"not found\"}");
+            }
+
+            close(client);
+        }
+
+        close(server);
+    }
+}
+
+int main()
+{
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+
+    std::cout
+        << "=========================================================\n"
+        << " NIFTY INDICATIVE CLOSE SERVER\n"
+        << "=========================================================\n"
+        << "Multicast : "
+        << MULTICAST_IP
+        << ":"
+        << MULTICAST_PORT
+        << "\n"
+        << "HTTP      : "
+        << HTTP_PORT
+        << "\n"
+        << "TX        : "
+        << TX_INDICATIVE_INDICES
+        << " (BCAST_INDICATIVE_INDICES)\n"
+        << "=========================================================\n";
+
+    std::thread http_thread(http_server);
+
+    setup_multicast_socket();
+
+    g_running = 0;
+
+    if (http_thread.joinable())
+        http_thread.join();
+
+    std::cout << "[ICP] stopped\n";
+    return 0;
+}

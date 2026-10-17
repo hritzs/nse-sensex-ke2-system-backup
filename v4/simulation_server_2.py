@@ -1,0 +1,1909 @@
+#!/usr/bin/env python3
+"""
+NIFTY Minute Straddle Simulation Server
+
+Clean replacement for the legacy simulation_server.py.
+
+Scope:
+    - Minute-straddle simulations only
+    - No LUTs
+    - No GammaShortDailydata.csv
+    - No historical signal/reference engine
+    - One live WebSocket market feed
+    - Five independent simulation lanes: 0916/0917/0918/0919/NOW
+    - SQLite persistence for all lanes
+    - Separate static frontend in frontend/
+
+The strategy model intentionally keeps these concepts separate:
+    market ATM             = current live ATM CE + PE
+    position strike        = frozen at entry
+    position straddle      = frozen-strike CE + PE
+    min/max straddle       = extrema of the frozen position straddle
+
+DTE convention:
+    Uses the trading-session clock 09:15-15:40 IST.
+    One complete session = 385 minutes.
+    This is the only DTE implementation in this server.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import os
+import re
+import sqlite3
+import threading
+import time as monotonic_time
+from dataclasses import dataclass, field
+from datetime import datetime, time, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any, Optional
+from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
+
+import websockets
+
+
+# ============================================================================
+# CONFIG
+# ============================================================================
+
+BASE_DIR = Path(__file__).resolve().parent
+FRONTEND_DIR = BASE_DIR / "frontend"
+DATA_DIR = BASE_DIR / "data"
+DB_PATH = Path(os.environ.get("MINUTE_SIM_DB", str(DATA_DIR / "minute_simulation_v2.db")))
+
+WEBSOCKET_URI = os.environ.get("NIFTY_WS_URI", "ws://127.0.0.1:9001")
+HTTP_HOST = os.environ.get("MINUTE_HTTP_HOST", "0.0.0.0")
+HTTP_PORT = int(os.environ.get("MINUTE_HTTP_PORT", "8000"))
+
+IST = ZoneInfo("Asia/Kolkata")
+MARKET_OPEN = time(9, 15)
+MARKET_CLOSE = time(15, 40)
+SESSION_MINUTES = 385.0
+
+RUN_IDS = ("0916", "0917", "0918", "0919", "NOW")
+RUN_STARTS = {
+    "0916": (9, 16),
+    "0917": (9, 17),
+    "0918": (9, 18),
+    "0919": (9, 19),
+}
+
+RISK_FREE_RATE = 0.0
+SL_BPS = 14.0
+HEDGE_DIVISOR = 57.0
+HEDGE_FLOOR = 0.0008
+RTV_THRESHOLD = 0.00015
+RTV4_THRESHOLD = 0.0006
+IV_DROP_THRESHOLD = 0.10
+
+TP_HIGH = (30.0, 25.0, 25.0, 20.0, 15.0, 15.0, 15.0)
+TP_LOW = (16.0, 13.0, 13.0, 10.0, 8.0, 8.0, 8.0)
+
+MAX_HISTORY = 1000
+MAX_HEDGE_EVENTS = 500
+MAX_TRADE_HISTORY = 20
+
+
+# ============================================================================
+# TIME / NUMERIC HELPERS
+# ============================================================================
+
+
+def now_ist() -> datetime:
+    return datetime.now(IST)
+
+
+def now_naive_ist() -> datetime:
+    return now_ist().replace(tzinfo=None)
+
+
+def iso_now() -> str:
+    return now_ist().isoformat(timespec="seconds")
+
+
+def finite_float(value: Any) -> Optional[float]:
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def json_clean(value: Any) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(k): json_clean(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_clean(v) for v in value]
+    return str(value)
+
+
+def parse_timestamp(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=IST)
+    return dt.astimezone(IST)
+
+
+def parse_expiry_date(expiry: str) -> Optional[datetime]:
+    text = str(expiry or "").strip().upper()
+    for fmt in ("%d-%b-%y", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def expiry_sort_key(expiry: str) -> Optional[datetime]:
+    parsed = parse_expiry_date(expiry)
+    if parsed is None:
+        return None
+    return parsed.replace(hour=15, minute=40, second=0, microsecond=0)
+
+
+# ============================================================================
+# SESSION-AWARE DTE
+# ============================================================================
+
+
+def trading_dte(expiry: str, current: Optional[datetime] = None) -> Optional[float]:
+    """Return session-normalized DTE using 09:15-15:40 IST."""
+    parsed = parse_expiry_date(expiry)
+    if parsed is None:
+        return None
+
+    now = current or now_ist()
+    today = now.date()
+    exp_date = parsed.date()
+    days = (exp_date - today).days
+
+    if days < 0:
+        return 0.0001
+
+    current_minutes = (
+        now.hour * 60
+        + now.minute
+        + now.second / 60.0
+        + now.microsecond / 60_000_000.0
+    )
+    open_minutes = 9 * 60 + 15
+    close_minutes = 15 * 60 + 40
+
+    if days == 0:
+        if current_minutes >= close_minutes:
+            return 0.0001
+        if current_minutes < open_minutes:
+            return 1.0
+        return max(
+            (close_minutes - current_minutes) / SESSION_MINUTES,
+            0.0001,
+        )
+
+    if current_minutes >= close_minutes:
+        today_fraction = 0.0
+    elif current_minutes < open_minutes:
+        today_fraction = 1.0
+    else:
+        elapsed = current_minutes - open_minutes
+        today_fraction = max(
+            0.0,
+            1.0 - elapsed / SESSION_MINUTES,
+        )
+
+    return max(days + today_fraction, 0.0001)
+
+
+# ============================================================================
+# BLACK-SCHOLES
+# ============================================================================
+
+
+def norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def norm_pdf(x: float) -> float:
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def bs_price(is_call: bool, spot: float, strike: float, t: float, rate: float, vol: float) -> float:
+    if spot <= 0 or strike <= 0:
+        return math.nan
+    if t <= 0 or vol <= 0:
+        return max(spot - strike, 0.0) if is_call else max(strike - spot, 0.0)
+
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * vol * vol) * t) / (vol * sqrt_t)
+    d2 = d1 - vol * sqrt_t
+
+    if is_call:
+        return spot * norm_cdf(d1) - strike * math.exp(-rate * t) * norm_cdf(d2)
+    return strike * math.exp(-rate * t) * norm_cdf(-d2) - spot * norm_cdf(-d1)
+
+
+def bs_greeks(is_call: bool, spot: float, strike: float, t: float, rate: float, vol: float) -> dict[str, float]:
+    if spot <= 0 or strike <= 0 or t <= 0 or vol <= 0:
+        return {"delta": 1.0 if is_call else -1.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * vol * vol) * t) / (vol * sqrt_t)
+    d2 = d1 - vol * sqrt_t
+    pdf = norm_pdf(d1)
+    disc = math.exp(-rate * t)
+
+    if is_call:
+        delta = norm_cdf(d1)
+        theta_year = -(spot * pdf * vol) / (2.0 * sqrt_t) - rate * strike * disc * norm_cdf(d2)
+    else:
+        delta = norm_cdf(d1) - 1.0
+        theta_year = -(spot * pdf * vol) / (2.0 * sqrt_t) + rate * strike * disc * norm_cdf(-d2)
+
+    gamma = pdf / (spot * vol * sqrt_t)
+    theta_day = theta_year / 365.0
+    vega_per_pct = spot * pdf * sqrt_t / 100.0
+
+    return {
+        "delta": delta,
+        "gamma": gamma,
+        "theta": theta_day,
+        "vega": vega_per_pct,
+    }
+
+
+def implied_vol_from_price(
+    is_call: bool,
+    spot: float,
+    strike: float,
+    t: float,
+    price: float,
+    rate: float = RISK_FREE_RATE,
+) -> Optional[float]:
+    if any(x is None or not math.isfinite(float(x)) for x in (spot, strike, t, price)):
+        return None
+    if spot <= 0 or strike <= 0 or t <= 0 or price <= 0:
+        return None
+
+    intrinsic = max(spot - strike, 0.0) if is_call else max(strike - spot, 0.0)
+    if price <= intrinsic:
+        return None
+
+    lo, hi = 1e-6, 5.0
+    p_hi = bs_price(is_call, spot, strike, t, rate, hi)
+    if price > p_hi:
+        return None
+
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        p = bs_price(is_call, spot, strike, t, rate, mid)
+        if p > price:
+            hi = mid
+        else:
+            lo = mid
+    return 0.5 * (lo + hi)
+
+
+def iv_decimal(value: Any) -> Optional[float]:
+    x = finite_float(value)
+    if x is None or x <= 0:
+        return None
+    return x / 100.0 if x > 2.0 else x
+
+
+# ============================================================================
+# QUOTE / MARKET BOOK
+# ============================================================================
+
+
+@dataclass
+class OptionQuote:
+    symbol: str
+    expiry: str
+    strike: float
+    option_type: str
+    ltp: Optional[float] = None
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    iv: Optional[float] = None
+    rx_monotonic: float = 0.0
+    timestamp: Optional[str] = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "expiry": self.expiry,
+            "strike": self.strike,
+            "type": self.option_type,
+            "ltp": self.ltp,
+            "bid": self.bid,
+            "ask": self.ask,
+            "iv": self.iv,
+            "rx": self.rx_monotonic,
+            "timestamp": self.timestamp,
+        }
+
+
+class MarketBook:
+    """One synchronized in-memory market book shared by all simulations."""
+
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.options: dict[tuple[str, int, str], OptionQuote] = {}
+        self.synthetic_by_expiry: dict[str, float] = {}
+        self.synthetic_rx_by_expiry: dict[str, float] = {}
+        self.future_by_expiry: dict[str, float] = {}
+        self.future_rx_by_expiry: dict[str, float] = {}
+        self.latest_rx_monotonic = 0.0
+        self.latest_timestamp: Optional[str] = None
+        self.selected_expiry: Optional[str] = None
+        self.expiry_mode = "auto"
+
+    @staticmethod
+    def _extract_expiry_strike_type(symbol: str, expiry: Any, strike: Any) -> tuple[Optional[str], Optional[float], Optional[str]]:
+        text = str(symbol or "").strip().upper()
+        exp = str(expiry or "").strip().upper() or None
+        st = finite_float(strike)
+
+        # Pipe format: NIFTY|01-SEP-26|24050|CE
+        parts = text.split("|")
+        if len(parts) >= 4:
+            exp = exp or parts[1].strip().upper()
+            if st is None:
+                st = finite_float(parts[2])
+            typ = parts[3].strip().upper()
+            if typ in ("CE", "PE"):
+                return exp, st, typ
+            if typ == "FUT":
+                return exp, st or 0.0, "FUT"
+
+        # Compact NSE format: NIFTY26SEP2624050CE
+        m = re.search(
+            r"NIFTY(\d{2}[A-Z]{3}\d{2})([0-9]+(?:\.[0-9]+)?)(CE|PE)$",
+            text,
+        )
+        if m:
+            raw = m.group(1)
+            exp = exp or f"{raw[:2]}-{raw[2:5]}-{raw[5:]}"
+            st = st if st is not None else finite_float(m.group(2))
+            return exp, st, m.group(3)
+
+        typ = "CE" if text.endswith("CE") else "PE" if text.endswith("PE") else None
+        return exp, st, typ
+
+    @staticmethod
+    def _tick_timestamp(tick: dict[str, Any]) -> Optional[str]:
+        value = tick.get("timestamp", tick.get("published_at", tick.get("ts")))
+        if value is None:
+            return None
+        return str(value)
+
+    @staticmethod
+    def _quote_value(tick: dict[str, Any], *names: str) -> Optional[float]:
+        for name in names:
+            if name in tick:
+                value = finite_float(tick.get(name))
+                if value is not None:
+                    return value
+        return None
+
+    def ingest(self, tick: dict[str, Any]) -> None:
+        if not isinstance(tick, dict):
+            return
+
+        msg_type = str(tick.get("type", "")).strip().lower()
+        symbol = str(tick.get("symbol", tick.get("sym", ""))).strip()
+        if not symbol:
+            return
+
+        upper = symbol.upper()
+        underlying = str(tick.get("underlying", "")).strip().upper()
+        if underlying and underlying != "NIFTY":
+            return
+        if not underlying and not upper.startswith("NIFTY|") and not upper.startswith("NIFTY2"):
+            return
+        if upper.startswith("NIFTYNXT50") or upper.startswith("BANKNIFTY"):
+            return
+
+        now_mono = monotonic_time.monotonic()
+        self.latest_rx_monotonic = now_mono
+        self.latest_timestamp = self._tick_timestamp(tick) or iso_now()
+
+        with self.lock:
+            # Futures are published separately by the C++ server.
+            if msg_type == "future_quote" or upper.startswith("NIFTY|") and upper.endswith("|0|FUT"):
+                expiry = str(tick.get("expiry", "")).strip().upper()
+                ltp = self._quote_value(tick, "ltp", "last", "price")
+                if expiry and ltp is not None and ltp > 0:
+                    self.future_by_expiry[expiry] = ltp
+                    self.future_rx_by_expiry[expiry] = now_mono
+                return
+
+            expiry, strike, option_type = self._extract_expiry_strike_type(
+                symbol,
+                tick.get("expiry"),
+                tick.get("strike"),
+            )
+            if not expiry or strike is None or option_type not in ("CE", "PE"):
+                return
+
+            ltp = self._quote_value(tick, "ltp", "last", "price")
+            bid = self._quote_value(tick, "bid1", "bid", "Bid")
+            ask = self._quote_value(tick, "ask1", "ask", "Ask")
+            iv = iv_decimal(tick.get("iv"))
+
+            key = (expiry, int(round(strike)), option_type)
+            q = OptionQuote(
+                symbol=symbol,
+                expiry=expiry,
+                strike=float(strike),
+                option_type=option_type,
+                ltp=ltp,
+                bid=bid,
+                ask=ask,
+                iv=iv,
+                rx_monotonic=now_mono,
+                timestamp=self.latest_timestamp,
+            )
+            self.options[key] = q
+
+            syn = self._quote_value(tick, "syn_fut", "synthetic_future", "synthetic", "spot")
+            if syn is not None and syn > 0:
+                self.synthetic_by_expiry[expiry] = syn
+                self.synthetic_rx_by_expiry[expiry] = now_mono
+
+    def _available_expiries_locked(self) -> list[str]:
+        now = now_ist().replace(tzinfo=None)
+        result: list[tuple[datetime, str]] = []
+        seen: set[str] = set()
+
+        expiry_candidates = set(self.synthetic_by_expiry)
+        expiry_candidates.update(key[0] for key in self.options)
+        expiry_candidates.update(self.future_by_expiry)
+
+        for expiry in expiry_candidates:
+            if expiry in seen:
+                continue
+            dt = expiry_sort_key(expiry)
+            if dt is None or dt < now:
+                continue
+
+            has_pair = False
+            strike = self._atm_strike_locked(expiry)
+            if strike is not None:
+                ce = self.options.get((expiry, strike, "CE"))
+                pe = self.options.get((expiry, strike, "PE"))
+                has_pair = bool(
+                    ce and pe
+                    and ce.ltp is not None and ce.ltp > 0
+                    and pe.ltp is not None and pe.ltp > 0
+                )
+            if has_pair:
+                result.append((dt, expiry))
+                seen.add(expiry)
+
+        result.sort(key=lambda x: x[0])
+        return [expiry for _, expiry in result]
+
+    def available_expiries(self) -> list[str]:
+        with self.lock:
+            return self._available_expiries_locked()
+
+    def _atm_strike_locked(self, expiry: str, synthetic: Optional[float] = None) -> Optional[int]:
+        syn = synthetic if synthetic is not None else self.synthetic_by_expiry.get(expiry)
+        if syn is None or syn <= 0:
+            return None
+        return int(round(syn / 50.0) * 50)
+
+    def _nearest_expiry_candidate_locked(self) -> Optional[str]:
+        """Return the nearest non-expired expiry known to the feed.
+
+        Auto mode deliberately selects by expiry date, not by which expiry
+        happens to have a complete ATM pair on this exact tick.  The caller
+        may wait for a coherent snapshot rather than silently jumping to a
+        later expiry.
+        """
+        now = now_ist().replace(tzinfo=None)
+        candidates: list[tuple[datetime, str]] = []
+
+        expiry_candidates = set(self.synthetic_by_expiry)
+        expiry_candidates.update(key[0] for key in self.options)
+        expiry_candidates.update(self.future_by_expiry)
+
+        for expiry in expiry_candidates:
+            dt = expiry_sort_key(expiry)
+            if dt is None or dt < now:
+                continue
+            candidates.append((dt, expiry))
+
+        candidates.sort(key=lambda x: x[0])
+        return candidates[0][1] if candidates else None
+
+    def choose_expiry(self) -> Optional[str]:
+        with self.lock:
+            if self.expiry_mode == "manual" and self.selected_expiry:
+                return self.selected_expiry
+
+            return self._nearest_expiry_candidate_locked()
+
+    def set_expiry(self, expiry: Optional[str]) -> tuple[bool, Optional[str], list[str]]:
+        requested = str(expiry or "").strip().upper()
+        with self.lock:
+            available = self._available_expiries_locked()
+            if not requested or requested == "AUTO":
+                self.expiry_mode = "auto"
+                self.selected_expiry = None
+                target = available[0] if available else None
+                return True, target, available
+            if requested not in available:
+                return False, None, available
+            self.expiry_mode = "manual"
+            self.selected_expiry = requested
+            return True, requested, available
+
+    def _fresh(self, rx: Optional[float], max_age: float = 2.0) -> bool:
+        return rx is not None and rx > 0 and monotonic_time.monotonic() - rx <= max_age
+
+    def _snapshot_for_expiry_locked(self, expiry: str) -> Optional[dict[str, Any]]:
+        syn = self.synthetic_by_expiry.get(expiry)
+        syn_rx = self.synthetic_rx_by_expiry.get(expiry)
+        if syn is None or syn <= 0 or not self._fresh(syn_rx):
+            return None
+
+        atm = self._atm_strike_locked(expiry, syn)
+        if atm is None:
+            return None
+        ce = self.options.get((expiry, atm, "CE"))
+        pe = self.options.get((expiry, atm, "PE"))
+        if ce is None or pe is None:
+            return None
+        if not self._fresh(ce.rx_monotonic) or not self._fresh(pe.rx_monotonic):
+            return None
+        if ce.ltp is None or pe.ltp is None or ce.ltp <= 0 or pe.ltp <= 0:
+            return None
+
+        return {
+            "expiry": expiry,
+            "spot": float(syn),
+            "synthetic_future": float(syn),
+            "atm": float(atm),
+            "ce": ce,
+            "pe": pe,
+            "ce_ltp": float(ce.ltp),
+            "pe_ltp": float(pe.ltp),
+            "straddle": float(ce.ltp + pe.ltp),
+            "receive_time": ce.timestamp or pe.timestamp or self.latest_timestamp,
+        }
+
+    def current_snapshot(self, expiry: Optional[str] = None) -> Optional[dict[str, Any]]:
+        with self.lock:
+            selected = expiry or self.choose_expiry()
+            if not selected:
+                return None
+            return self._snapshot_for_expiry_locked(selected)
+
+    def position_quotes(self, expiry: str, ce_symbol: str, pe_symbol: str) -> tuple[Optional[OptionQuote], Optional[OptionQuote]]:
+        with self.lock:
+            ce: Optional[OptionQuote] = None
+            pe: Optional[OptionQuote] = None
+            for q in self.options.values():
+                if q.expiry != expiry:
+                    continue
+                if q.symbol == ce_symbol:
+                    ce = q
+                elif q.symbol == pe_symbol:
+                    pe = q
+                if ce is not None and pe is not None:
+                    break
+            return ce, pe
+
+
+# ============================================================================
+# PERSISTENCE
+# ============================================================================
+
+
+class Persistence:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.lock = threading.RLock()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.init_db()
+
+    def connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def init_db(self) -> None:
+        with self.lock:
+            conn = self.connect()
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS minute_runs (
+                        trade_date TEXT NOT NULL,
+                        run_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        expiry TEXT,
+                        updated_at TEXT NOT NULL,
+                        payload TEXT NOT NULL,
+                        PRIMARY KEY (trade_date, run_id)
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS minute_config (
+                        key TEXT PRIMARY KEY,
+                        value TEXT,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO minute_config(key, value, updated_at)
+                    VALUES ('schema_version', '2', ?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+                    """,
+                    (iso_now(),),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def save_run(self, run: "MinuteSimulation") -> None:
+        payload = json.dumps(json_clean(run.snapshot()), ensure_ascii=False, allow_nan=False)
+        status = run.status
+        with self.lock:
+            conn = self.connect()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO minute_runs
+                        (trade_date, run_id, status, expiry, updated_at, payload)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(trade_date, run_id)
+                    DO UPDATE SET
+                        status=excluded.status,
+                        expiry=excluded.expiry,
+                        updated_at=excluded.updated_at,
+                        payload=excluded.payload
+                    """,
+                    (
+                        run.trade_date,
+                        run.run_id,
+                        status,
+                        run.entry_expiry,
+                        iso_now(),
+                        payload,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def load_today(self, trade_date: str) -> dict[str, dict[str, Any]]:
+        """Load only valid v2 minute-run snapshots for today's date.
+
+        A legacy/incomplete row must never resurrect a fake RUNNING trade.
+        A started/completed snapshot must contain its frozen position identity.
+        """
+        loaded: dict[str, dict[str, Any]] = {}
+        with self.lock:
+            conn = self.connect()
+            try:
+                rows = conn.execute(
+                    "SELECT run_id, payload FROM minute_runs WHERE trade_date=?",
+                    (trade_date,),
+                ).fetchall()
+            finally:
+                conn.close()
+
+        for row in rows:
+            run_id = str(row["run_id"])
+            try:
+                payload = json.loads(row["payload"])
+                if not isinstance(payload, dict):
+                    raise ValueError("payload is not an object")
+
+                started = bool(payload.get("started"))
+                completed = bool(payload.get("completed"))
+                if started or completed:
+                    required = (
+                        "entry_expiry",
+                        "entry_atm",
+                        "entry_ce_symbol",
+                        "entry_pe_symbol",
+                    )
+                    missing = [
+                        key for key in required
+                        if payload.get(key) in (None, "")
+                    ]
+                    if missing:
+                        print(
+                            f"[DB] ignoring invalid legacy row run={run_id}: "
+                            f"missing {', '.join(missing)}"
+                        )
+                        continue
+
+                loaded[run_id] = payload
+            except Exception as exc:
+                print(f"[DB] ignoring invalid row run={run_id}: {exc!r}")
+
+        return loaded
+
+    def clear_run(self, trade_date: str, run_id: str) -> None:
+        with self.lock:
+            conn = self.connect()
+            try:
+                conn.execute(
+                    "DELETE FROM minute_runs WHERE trade_date=? AND run_id=?",
+                    (trade_date, run_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def save_config(self, key: str, value: Optional[str]) -> None:
+        with self.lock:
+            conn = self.connect()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO minute_config(key, value, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key)
+                    DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+                    """,
+                    (key, value, iso_now()),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def load_config(self, key: str) -> Optional[str]:
+        with self.lock:
+            conn = self.connect()
+            try:
+                row = conn.execute(
+                    "SELECT value FROM minute_config WHERE key=?",
+                    (key,),
+                ).fetchone()
+                return str(row["value"]) if row and row["value"] is not None else None
+            finally:
+                conn.close()
+
+
+# ============================================================================
+# MINUTE SIMULATION
+# ============================================================================
+
+
+@dataclass
+class MinuteSimulation:
+    run_id: str
+    book: MarketBook
+    persistence: Persistence
+    trade_date: str
+
+    armed: bool = False
+    started: bool = False
+    completed: bool = False
+
+    request_timestamp: Optional[str] = None
+    start_timestamp: Optional[str] = None
+    entry_timestamp: Optional[str] = None
+    exit_timestamp: Optional[str] = None
+
+    entry_expiry: Optional[str] = None
+    entry_atm: Optional[float] = None
+    entry_ce_symbol: Optional[str] = None
+    entry_pe_symbol: Optional[str] = None
+    entry_ce: Optional[float] = None
+    entry_pe: Optional[float] = None
+    entry_straddle: Optional[float] = None
+    entry_spot: Optional[float] = None
+    entry_iv: Optional[float] = None
+    entry_dte: Optional[float] = None
+    entry_quote_source: Optional[str] = None
+
+    current_ce: Optional[float] = None
+    current_pe: Optional[float] = None
+    current_straddle: Optional[float] = None
+    min_straddle: Optional[float] = None
+    max_straddle: Optional[float] = None
+
+    market_atm: Optional[float] = None
+    market_ce: Optional[float] = None
+    market_pe: Optional[float] = None
+    market_straddle: Optional[float] = None
+    market_spot: Optional[float] = None
+
+    option_delta: Optional[float] = None
+    net_delta: float = 0.0
+    delta: Optional[float] = None
+    gamma: Optional[float] = None
+    theta: Optional[float] = None
+    vega: Optional[float] = None
+
+    hedge: float = 0.0
+    hedge_target: float = 0.0
+    hedge_cash: float = 0.0
+    initial_hedge: float = 0.0
+
+    points_out: Optional[float] = None
+    points_allowed: Optional[float] = None
+
+    tp_bps: Optional[float] = None
+    tp_points: Optional[float] = None
+    sl_points: Optional[float] = None
+    rtv_value: Optional[float] = None
+    rtv_threshold: Optional[float] = None
+    otm_iv: Optional[float] = None
+    zero_dte_active: bool = False
+    iv_drop_threshold: float = IV_DROP_THRESHOLD
+    iv_drop_active: bool = False
+
+    option_pnl: float = 0.0
+    future_pnl: float = 0.0
+    total_pnl: float = 0.0
+
+    exit_reason: Optional[str] = None
+    entry_block_reason: Optional[str] = None
+
+    history: list[dict[str, Any]] = field(default_factory=list)
+    hedge_events: list[dict[str, Any]] = field(default_factory=list)
+    trade_history: list[dict[str, Any]] = field(default_factory=list)
+
+    last_minute_key: Optional[str] = None
+    last_hedge_minute_key: Optional[str] = None
+    last_persist_monotonic: float = 0.0
+    last_processed_monotonic: float = 0.0
+    lock: threading.RLock = field(default_factory=threading.RLock)
+
+    @property
+    def status(self) -> str:
+        if self.completed:
+            return "COMPLETED"
+        if self.started:
+            return "RUNNING"
+        if self.armed:
+            return "ARMED"
+        return "WAITING"
+
+    def _position_iv(self, ce: OptionQuote, pe: OptionQuote, spot: float, strike: float, dte: float) -> Optional[float]:
+        values = [iv_decimal(ce.iv), iv_decimal(pe.iv)]
+        valid = [v for v in values if v is not None and v > 0]
+        if valid:
+            return sum(valid) / len(valid)
+
+        t = max(dte / 365.0, 1e-5)
+        iv_values: list[float] = []
+        for is_call, q in ((True, ce), (False, pe)):
+            if q.ltp is None:
+                continue
+            iv = implied_vol_from_price(is_call, spot, strike, t, q.ltp)
+            if iv is not None and iv > 0:
+                iv_values.append(iv)
+        return sum(iv_values) / len(iv_values) if iv_values else None
+
+    def _update_market_reference(self, snapshot: Optional[dict[str, Any]]) -> None:
+        if not snapshot:
+            return
+        self.market_spot = finite_float(snapshot.get("spot"))
+        self.market_atm = finite_float(snapshot.get("atm"))
+        self.market_ce = finite_float(snapshot.get("ce_ltp"))
+        self.market_pe = finite_float(snapshot.get("pe_ltp"))
+        if self.market_ce is not None and self.market_pe is not None:
+            self.market_straddle = self.market_ce + self.market_pe
+
+    def _calculate_greeks(self, spot: float, strike: float, dte: float, iv: float) -> None:
+        t = max(dte / 365.0, 1e-5)
+        call = bs_greeks(True, spot, strike, t, RISK_FREE_RATE, iv)
+        put = bs_greeks(False, spot, strike, t, RISK_FREE_RATE, iv)
+
+        # Short CE + short PE. Values are per 1 underlying quantity.
+        self.delta = -float(call["delta"] + put["delta"])
+        self.option_delta = self.delta
+        self.gamma = -float(call["gamma"] + put["gamma"])
+        self.theta = -float(call["theta"] + put["theta"])
+        self.vega = -float(call["vega"] + put["vega"])
+        self.net_delta = self.option_delta + self.hedge
+
+    def _calculate_risk(self, spot: float, iv: float) -> None:
+        if self.gamma is not None and abs(self.gamma) > 1e-12:
+            self.points_out = abs(self.net_delta / self.gamma)
+        else:
+            self.points_out = None
+
+        if self.current_straddle is not None and self.current_straddle > 0:
+            raw_allowed = (iv / HEDGE_DIVISOR) * spot
+            cap_allowed = self.current_straddle / 4.0
+            floor_allowed = HEDGE_FLOOR * spot
+            self.points_allowed = max(floor_allowed, min(raw_allowed, cap_allowed))
+        else:
+            self.points_allowed = None
+
+    def _set_tp_sl(self, dte: float) -> None:
+        idx = int(max(0, min(6, math.ceil(dte) - 1)))
+        build_iv = self.entry_iv or 0.0
+        rounded = round(build_iv, 2)
+        fraction = (rounded - 0.08) / 0.12
+        base_tp = TP_LOW[idx] + fraction * (TP_HIGH[idx] - TP_LOW[idx])
+        self.tp_bps = float(max(1.0, round(base_tp)))
+        if self.entry_spot is not None:
+            self.tp_points = self.entry_spot * self.tp_bps / 10000.0
+            self.sl_points = -(self.entry_spot * SL_BPS / 10000.0)
+
+    def _execute_hedge(self, new_target: float, spot: float, reason: str) -> None:
+        old = float(self.hedge)
+        change = float(new_target - old)
+        if abs(change) < 1e-12:
+            return
+
+        # Synthetic hedge is transacted at the authoritative synthetic spot.
+        self.hedge_cash -= change * float(spot)
+        self.hedge = float(new_target)
+        self.hedge_target = float(new_target)
+        self.net_delta = (self.option_delta or 0.0) + self.hedge
+
+        self.hedge_events.insert(
+            0,
+            {
+                "timestamp": iso_now(),
+                "type": reason,
+                "old_hedge": old,
+                "new_hedge": self.hedge,
+                "change": change,
+                "delta": self.option_delta,
+                "net_delta": self.net_delta,
+                "points_out": self.points_out,
+                "points_allowed": self.points_allowed,
+                "synthetic": spot,
+            },
+        )
+        del self.hedge_events[MAX_HEDGE_EVENTS:]
+
+    def _maybe_rebalance(self, spot: float) -> None:
+        if self.points_out is None or self.points_allowed is None:
+            return
+
+        minute_key = now_ist().strftime("%Y-%m-%d %H:%M")
+        now = now_ist()
+        if now.second < 59 or minute_key == self.last_hedge_minute_key:
+            return
+
+        self.last_hedge_minute_key = minute_key
+
+        if self.points_out > self.points_allowed:
+            target = -(self.option_delta or 0.0)
+            self._execute_hedge(target, spot, "RISK_BREACH")
+
+    def _update_pnl(self, spot: float) -> None:
+        if self.entry_straddle is None or self.current_straddle is None:
+            return
+
+        self.option_pnl = float(self.entry_straddle - self.current_straddle)
+        self.future_pnl = float(self.hedge_cash + self.hedge * spot)
+        self.total_pnl = float(self.option_pnl + self.future_pnl)
+
+    def _refresh_exit_metrics(self, spot: float, dte: float, ce: OptionQuote, pe: OptionQuote, iv: float) -> Optional[str]:
+        self._set_tp_sl(dte)
+
+        self.zero_dte_active = dte <= 1.0
+        self.iv_drop_active = self.zero_dte_active and now_ist().time() >= time(14, 57)
+
+        otm = pe if spot > float(self.entry_atm or 0.0) else ce
+        otm_px = otm.ltp
+        self.otm_iv = iv_decimal(otm.iv)
+        if self.otm_iv is None and otm_px is not None and self.entry_atm is not None:
+            self.otm_iv = implied_vol_from_price(
+                otm.option_type == "CE",
+                spot,
+                float(self.entry_atm),
+                max(dte / 365.0, 1e-5),
+                otm_px,
+            )
+
+        self.rtv_value = 2.0 * otm_px if self.zero_dte_active and otm_px is not None else None
+        self.rtv_threshold = RTV_THRESHOLD * spot if self.zero_dte_active else None
+
+        if self.sl_points is not None and self.total_pnl <= self.sl_points:
+            return "STOP_LOSS"
+        if self.tp_points is not None and self.total_pnl >= self.tp_points:
+            return "TAKE_PROFIT"
+
+        if self.zero_dte_active and otm_px is not None and (2.0 * otm_px) < RTV_THRESHOLD * spot:
+            return "OTM_TRADE_VALUE"
+
+        ref_price = bs_price(
+            otm.option_type == "CE",
+            spot,
+            float(self.entry_atm or 0.0),
+            max(dte / 365.0, 1e-5),
+            RISK_FREE_RATE,
+            max(self.entry_iv or iv, 1e-6),
+        )
+        if self.zero_dte_active and math.isfinite(ref_price) and (2.0 * ref_price) < RTV4_THRESHOLD * spot:
+            return "OTM_REFERENCE_VALUE"
+
+        if self.iv_drop_active and self.otm_iv is not None and self.otm_iv < IV_DROP_THRESHOLD:
+            return "IV_DROP"
+
+        if now_ist().time() >= MARKET_CLOSE:
+            return "EOD"
+        return None
+
+    def _record_minute(self) -> None:
+        now = now_ist()
+        key = now.strftime("%Y-%m-%d %H:%M")
+        if key == self.last_minute_key:
+            return
+        if self.current_straddle is None:
+            return
+
+        self.last_minute_key = key
+        self.history.append(
+            {
+                "timestamp": now.isoformat(timespec="seconds"),
+                "synthetic_future": self.market_spot,
+                "spot": self.market_spot,
+                "atm": self.entry_atm,
+                "current_ce": self.current_ce,
+                "current_pe": self.current_pe,
+                "straddle": self.current_straddle,
+                "delta": self.net_delta,
+                "total_pnl": self.total_pnl,
+                "option_pnl": self.option_pnl,
+                "future_pnl": self.future_pnl,
+                "hedge": self.hedge,
+                "hedge_target": self.hedge_target,
+                "points_out": self.points_out,
+                "points_allowed": self.points_allowed,
+            }
+        )
+        del self.history[:-MAX_HISTORY]
+        self.persistence.save_run(self)
+
+    def _enter(self, snapshot: dict[str, Any]) -> bool:
+        expiry = str(snapshot["expiry"])
+        spot = float(snapshot["spot"])
+        atm = float(snapshot["atm"])
+        ce: OptionQuote = snapshot["ce"]
+        pe: OptionQuote = snapshot["pe"]
+        dte = trading_dte(expiry)
+
+        if dte is None:
+            self.entry_block_reason = "DTE_UNAVAILABLE"
+            return False
+
+        ce_bid = ce.bid if ce.bid is not None and ce.bid > 0 else ce.ltp
+        pe_bid = pe.bid if pe.bid is not None and pe.bid > 0 else pe.ltp
+        if ce_bid is None or pe_bid is None or ce_bid <= 0 or pe_bid <= 0:
+            self.entry_block_reason = "ENTRY_QUOTES_UNAVAILABLE"
+            return False
+
+        iv = self._position_iv(ce, pe, spot, atm, dte)
+        if iv is None or iv <= 0:
+            self.entry_block_reason = "IV_UNAVAILABLE"
+            return False
+
+        self.started = True
+        self.completed = False
+        self.armed = True
+        self.entry_timestamp = iso_now()
+        self.entry_expiry = expiry
+        self.entry_atm = atm
+        self.entry_ce_symbol = ce.symbol
+        self.entry_pe_symbol = pe.symbol
+        self.entry_ce = float(ce_bid)
+        self.entry_pe = float(pe_bid)
+        self.entry_straddle = self.entry_ce + self.entry_pe
+        self.entry_spot = spot
+        self.entry_iv = iv
+        self.entry_dte = dte
+        self.entry_quote_source = "BID_ASK" if ce.bid and ce.ask and pe.bid and pe.ask else "LTP_FALLBACK"
+
+        self.current_ce = ce.ltp
+        self.current_pe = pe.ltp
+        self.current_straddle = (ce.ltp or 0.0) + (pe.ltp or 0.0)
+
+        # Market ATM reference is the source for min/max straddle.
+        # At entry the selected snapshot is both the market ATM and
+        # the initial position ATM, so the first extrema value is the
+        # live market ATM straddle at entry.
+        self.market_spot = spot
+        self.market_atm = atm
+        self.market_ce = ce.ltp
+        self.market_pe = pe.ltp
+        self.market_straddle = self.current_straddle
+        self.min_straddle = self.market_straddle
+        self.max_straddle = self.market_straddle
+
+        self.hedge = 0.0
+        self.hedge_target = 0.0
+        self.hedge_cash = 0.0
+        self._calculate_greeks(spot, atm, dte, iv)
+
+        # Initial hedge is a real synthetic transaction and is included in cash flow.
+        self.hedge = -float(self.option_delta or 0.0)
+        self.hedge_target = self.hedge
+        self.initial_hedge = self.hedge
+        self.hedge_cash = -self.hedge * spot
+        self.net_delta = (self.option_delta or 0.0) + self.hedge
+
+        self._calculate_risk(spot, iv)
+        self._set_tp_sl(dte)
+        self._update_pnl(spot)
+        self.entry_block_reason = None
+
+        self.history.clear()
+        self.last_minute_key = None
+        self._record_minute()
+        self.persistence.save_run(self)
+
+        print(
+            f"[ENTRY] run={self.run_id} time={self.entry_timestamp} "
+            f"expiry={expiry} atm={atm:.0f} CE={self.entry_ce:.2f} PE={self.entry_pe:.2f} "
+            f"delta={self.option_delta:.6f} gamma={self.gamma:.7f}"
+        )
+        return True
+
+    def process_snapshot(self, snapshot: Optional[dict[str, Any]]) -> None:
+        with self.lock:
+            self.last_processed_monotonic = monotonic_time.monotonic()
+
+            # A completed trade remains frozen financially but keeps live market display fields fresh.
+            if self.completed:
+                self._update_market_reference(snapshot)
+                return
+
+            if not self.started:
+                if not self.armed:
+                    return
+                if snapshot is None:
+                    return
+                self._enter(snapshot)
+                return
+
+            if snapshot is None or self.entry_expiry is None:
+                return
+
+            self._update_market_reference(snapshot)
+            spot = float(snapshot["spot"])
+            ce, pe = self.book.position_quotes(self.entry_expiry, self.entry_ce_symbol or "", self.entry_pe_symbol or "")
+            if ce is None or pe is None:
+                return
+            if ce.ltp is None or pe.ltp is None or ce.ltp <= 0 or pe.ltp <= 0:
+                return
+
+            self.current_ce = float(ce.ltp)
+            self.current_pe = float(pe.ltp)
+            self.current_straddle = self.current_ce + self.current_pe
+
+            # Min/max track ONLY the live MARKET ATM straddle.
+            # Position straddle above remains locked to entry symbols.
+            if self.market_straddle is not None:
+                if self.min_straddle is None:
+                    self.min_straddle = self.market_straddle
+                else:
+                    self.min_straddle = min(
+                        self.min_straddle,
+                        self.market_straddle,
+                    )
+
+                if self.max_straddle is None:
+                    self.max_straddle = self.market_straddle
+                else:
+                    self.max_straddle = max(
+                        self.max_straddle,
+                        self.market_straddle,
+                    )
+
+            dte = trading_dte(self.entry_expiry)
+            if dte is None:
+                return
+
+            iv = self._position_iv(ce, pe, spot, float(self.entry_atm or snapshot["atm"]), dte)
+            if iv is None:
+                return
+
+            self._calculate_greeks(
+                spot,
+                float(self.entry_atm or snapshot["atm"]),
+                dte,
+                iv,
+            )
+            self._calculate_risk(spot, iv)
+            self._maybe_rebalance(spot)
+            self._update_pnl(spot)
+
+            reason = self._refresh_exit_metrics(spot, dte, ce, pe, iv)
+
+            self._record_minute()
+
+            if reason:
+                self.finish(reason)
+            else:
+                # Persist current state even if this tick wasn't the first tick of a new minute.
+                now_mono = monotonic_time.monotonic()
+                if now_mono - self.last_persist_monotonic >= 1.0:
+                    self.last_persist_monotonic = now_mono
+                    self.persistence.save_run(self)
+
+    def finish(self, reason: str) -> None:
+        with self.lock:
+            if self.completed:
+                return
+            self.completed = True
+            self.armed = False
+            self.exit_reason = reason
+            self.exit_timestamp = iso_now()
+
+            self._update_pnl(self.market_spot if self.market_spot is not None else self.entry_spot or 0.0)
+            self.trade_history.insert(
+                0,
+                {
+                    "entry_timestamp": self.entry_timestamp,
+                    "exit_timestamp": self.exit_timestamp,
+                    "reason": reason,
+                    "expiry": self.entry_expiry,
+                    "entry_atm": self.entry_atm,
+                    "entry_straddle": self.entry_straddle,
+                    "final_straddle": self.current_straddle,
+                    "option_pnl": self.option_pnl,
+                    "future_pnl": self.future_pnl,
+                    "total_pnl": self.total_pnl,
+                    "hedge": self.hedge,
+                    "hedge_cash": self.hedge_cash,
+                },
+            )
+            del self.trade_history[MAX_TRADE_HISTORY:]
+            self.persistence.save_run(self)
+            print(
+                f"[EXIT] run={self.run_id} reason={reason} "
+                f"option={self.option_pnl:.4f} future={self.future_pnl:.4f} total={self.total_pnl:.4f}"
+            )
+
+    def arm(self, request_timestamp: Optional[str] = None) -> None:
+        with self.lock:
+            self.armed = True
+            self.request_timestamp = request_timestamp or iso_now()
+            self.start_timestamp = self.start_timestamp or self.request_timestamp
+            self.entry_block_reason = None
+            self.persistence.save_run(self)
+
+    def clear(self) -> None:
+        with self.lock:
+            self.armed = False
+            self.started = False
+            self.completed = False
+            self.request_timestamp = None
+            self.start_timestamp = None
+            self.entry_timestamp = None
+            self.exit_timestamp = None
+            self.entry_expiry = None
+            self.entry_atm = None
+            self.entry_ce_symbol = None
+            self.entry_pe_symbol = None
+            self.entry_ce = None
+            self.entry_pe = None
+            self.entry_straddle = None
+            self.entry_spot = None
+            self.entry_iv = None
+            self.entry_dte = None
+            self.entry_quote_source = None
+            self.current_ce = None
+            self.current_pe = None
+            self.current_straddle = None
+            self.min_straddle = None
+            self.max_straddle = None
+            self.market_atm = None
+            self.market_ce = None
+            self.market_pe = None
+            self.market_straddle = None
+            self.market_spot = None
+            self.option_delta = None
+            self.net_delta = 0.0
+            self.delta = None
+            self.gamma = None
+            self.theta = None
+            self.vega = None
+            self.hedge = 0.0
+            self.hedge_target = 0.0
+            self.hedge_cash = 0.0
+            self.initial_hedge = 0.0
+            self.points_out = None
+            self.points_allowed = None
+            self.tp_bps = None
+            self.tp_points = None
+            self.sl_points = None
+            self.rtv_value = None
+            self.rtv_threshold = None
+            self.otm_iv = None
+            self.zero_dte_active = False
+            self.iv_drop_active = False
+            self.option_pnl = 0.0
+            self.future_pnl = 0.0
+            self.total_pnl = 0.0
+            self.exit_reason = None
+            self.entry_block_reason = None
+            self.history.clear()
+            self.hedge_events.clear()
+            self.trade_history.clear()
+            self.last_minute_key = None
+            self.last_hedge_minute_key = None
+        self.persistence.clear_run(self.trade_date, self.run_id)
+
+    def restore(self, payload: dict[str, Any]) -> None:
+        with self.lock:
+            started = bool(payload.get("started"))
+            completed = bool(payload.get("completed"))
+            if (started or completed) and any(
+                payload.get(key) in (None, "")
+                for key in (
+                    "entry_expiry",
+                    "entry_atm",
+                    "entry_ce_symbol",
+                    "entry_pe_symbol",
+                )
+            ):
+                raise ValueError(
+                    "invalid persisted trade: started/completed without frozen entry identity"
+                )
+
+            for name in (
+                "armed", "started", "completed", "request_timestamp", "start_timestamp",
+                "entry_timestamp", "exit_timestamp", "entry_expiry", "entry_atm",
+                "entry_ce_symbol", "entry_pe_symbol", "entry_ce", "entry_pe", "entry_straddle",
+                "entry_spot", "entry_iv", "entry_dte", "entry_quote_source", "current_ce",
+                "current_pe", "current_straddle", "min_straddle", "max_straddle", "market_atm",
+                "market_ce", "market_pe", "market_straddle", "market_spot", "option_delta",
+                "net_delta", "delta", "gamma", "theta", "vega", "hedge", "hedge_target",
+                "hedge_cash", "initial_hedge", "points_out", "points_allowed", "tp_bps",
+                "tp_points", "sl_points", "rtv_value", "rtv_threshold", "otm_iv",
+                "zero_dte_active", "iv_drop_threshold", "iv_drop_active", "option_pnl",
+                "future_pnl", "total_pnl", "exit_reason", "entry_block_reason",
+                "last_minute_key", "last_hedge_minute_key",
+            ):
+                if name in payload:
+                    setattr(self, name, payload[name])
+
+            self.history = list(payload.get("history") or [])[-MAX_HISTORY:]
+            self.hedge_events = list(payload.get("hedge_events") or [])[:MAX_HEDGE_EVENTS]
+            self.trade_history = list(payload.get("trade_history") or [])[:MAX_TRADE_HISTORY]
+
+            # Repair old/incomplete state where min/max weren't persisted.
+            if (self.min_straddle is None or self.max_straddle is None) and self.history:
+                values = [
+                    finite_float(row.get("straddle"))
+                    for row in self.history
+                ]
+                values = [v for v in values if v is not None]
+                if values:
+                    self.min_straddle = min(values)
+                    self.max_straddle = max(values)
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "run_id": self.run_id,
+                "status": self.status,
+                "trade_date": self.trade_date,
+                "armed": self.armed,
+                "started": self.started,
+                "completed": self.completed,
+                "request_timestamp": self.request_timestamp,
+                "start_timestamp": self.start_timestamp,
+                "entry": {
+                    "timestamp": self.entry_timestamp,
+                    "expiry": self.entry_expiry,
+                    "atm": self.entry_atm,
+                    "ce": self.entry_ce_symbol,
+                    "pe": self.entry_pe_symbol,
+                    "ce_price": self.entry_ce,
+                    "pe_price": self.entry_pe,
+                    "straddle": self.entry_straddle,
+                    "spot": self.entry_spot,
+                    "synthetic_future": self.entry_spot,
+                    "iv": self.entry_iv,
+                    "dte": self.entry_dte,
+                    "quote_source": self.entry_quote_source,
+                },
+                "market": {
+                    "spot": self.market_spot,
+                    "synthetic_future": self.market_spot,
+                    "atm": self.market_atm,
+                    "ce": self.market_ce,
+                    "pe": self.market_pe,
+                    "straddle": self.market_straddle,
+                },
+                "position": {
+                    "active": self.started and not self.completed,
+                    "strike": self.entry_atm,
+                    "ce": self.entry_ce_symbol,
+                    "pe": self.entry_pe_symbol,
+                    "current_ce": self.current_ce,
+                    "current_pe": self.current_pe,
+                    "current_straddle": self.current_straddle,
+                    "min_straddle": self.min_straddle,
+                    "max_straddle": self.max_straddle,
+                    "market_atm": self.market_atm,
+                    "market_ce": self.market_ce,
+                    "market_pe": self.market_pe,
+                    "market_straddle": self.market_straddle,
+                },
+                "greeks": {
+                    "delta": self.net_delta,
+                    "option_delta": self.option_delta,
+                    "gamma": self.gamma,
+                    "theta": self.theta,
+                    "vega": self.vega,
+                },
+                "hedge": {
+                    "current": self.hedge,
+                    "target": self.hedge_target,
+                    "cash": self.hedge_cash,
+                    "initial": self.initial_hedge,
+                    "points_out": self.points_out,
+                    "points_allowed": self.points_allowed,
+                    "tp_bps": self.tp_bps,
+                    "tp_points": self.tp_points,
+                    "sl_points": self.sl_points,
+                    "rtv_value": self.rtv_value,
+                    "rtv_threshold": self.rtv_threshold,
+                    "iv_drop_threshold": self.iv_drop_threshold,
+                    "iv_drop_active": self.iv_drop_active,
+                    "otm_iv": self.otm_iv,
+                    "zero_dte_active": self.zero_dte_active,
+                    "events": list(self.hedge_events),
+                },
+                "pnl": {
+                    "option": self.option_pnl,
+                    "future": self.future_pnl,
+                    "synthetic_hedge": self.future_pnl,
+                    "total": self.total_pnl,
+                },
+                "exit": {
+                    "reason": self.exit_reason,
+                    "timestamp": self.exit_timestamp,
+                },
+                "entry_block_reason": self.entry_block_reason,
+                "history": list(self.history),
+                "trade_history": list(self.trade_history),
+            }
+
+
+# ============================================================================
+# CONTROLLER
+# ============================================================================
+
+
+class SimulationController:
+    def __init__(self, persistence: Persistence) -> None:
+        self.lock = threading.RLock()
+        self.book = MarketBook()
+        self.persistence = persistence
+        self.trade_date = now_ist().date().isoformat()
+        self.runs = {
+            run_id: MinuteSimulation(
+                run_id=run_id,
+                book=self.book,
+                persistence=persistence,
+                trade_date=self.trade_date,
+            )
+            for run_id in RUN_IDS
+        }
+        self.now_consumed = False
+        self._restore_today()
+
+    def _restore_today(self) -> None:
+        stored = self.persistence.load_today(self.trade_date)
+        for run_id, payload in stored.items():
+            sim = self.runs.get(run_id)
+            if sim is None:
+                continue
+            try:
+                sim.restore(payload)
+                if run_id == "NOW" and (sim.armed or sim.started or sim.completed):
+                    self.now_consumed = True
+                print(
+                    f"[DB] restored run={run_id} status={sim.status} expiry={sim.entry_expiry}"
+                )
+            except Exception as exc:
+                print(f"[DB] restore failed run={run_id}: {exc!r}")
+
+        saved_expiry = self.persistence.load_config("selected_expiry")
+        if saved_expiry:
+            parsed = parse_expiry_date(saved_expiry)
+            today = now_ist().date()
+            if parsed is not None and parsed.date() >= today:
+                self.book.selected_expiry = saved_expiry
+                self.book.expiry_mode = "manual"
+            else:
+                self.book.selected_expiry = None
+                self.book.expiry_mode = "auto"
+                self.persistence.save_config("selected_expiry", None)
+
+    def select_expiry(self, expiry: Optional[str]) -> tuple[bool, Optional[str], list[str]]:
+        with self.lock:
+            ok, target, available = self.book.set_expiry(expiry)
+            if ok:
+                self.persistence.save_config(
+                    "selected_expiry",
+                    self.book.selected_expiry,
+                )
+            return ok, target, available
+
+    def start_now(self) -> MinuteSimulation:
+        with self.lock:
+            sim = self.runs["NOW"]
+            if self.now_consumed or sim.started or sim.completed:
+                raise RuntimeError("NOW simulation already consumed for today")
+
+            expiry = self.book.choose_expiry()
+            if not expiry:
+                raise RuntimeError("NO_READY_EXPIRY")
+
+            sim.arm(iso_now())
+            sim.start_timestamp = iso_now()
+            self.now_consumed = True
+
+            # Immediately attempt entry from the same coherent snapshot.
+            snapshot = self.book.current_snapshot(expiry)
+            sim.process_snapshot(snapshot)
+            return sim
+
+    def start_fixed_if_due(self, run_id: str) -> None:
+        """Arm a fixed lane only during its exact scheduled minute.
+
+        There is intentionally NO backfill. Starting/restarting the server
+        after the scheduled minute must never create a historical entry.
+        """
+        if run_id not in RUN_STARTS:
+            return
+
+        now = now_ist()
+        start_hour, start_minute = RUN_STARTS[run_id]
+        sim = self.runs[run_id]
+
+        if sim.started or sim.completed or sim.armed:
+            return
+
+        if now.hour != start_hour or now.minute != start_minute:
+            return
+
+        timestamp = now.isoformat(timespec="seconds")
+        sim.arm(timestamp)
+        sim.start_timestamp = timestamp
+
+    def on_market_tick(self) -> None:
+        with self.lock:
+            # Fixed lanes arm after their scheduled minute. They enter on the first
+            # coherent live snapshot available after the scheduled time.
+            for run_id in ("0916", "0917", "0918", "0919"):
+                self.start_fixed_if_due(run_id)
+
+            for run_id, sim in self.runs.items():
+                if not sim.armed and not sim.started and run_id != "NOW":
+                    continue
+                if run_id == "NOW" and not sim.armed and not sim.started:
+                    continue
+
+                expiry = sim.entry_expiry or self.book.choose_expiry()
+                if not expiry:
+                    continue
+
+                snapshot = self.book.current_snapshot(expiry)
+                sim.process_snapshot(snapshot)
+
+    def clear_run(self, run_id: str) -> None:
+        sim = self.runs.get(run_id)
+        if sim is None:
+            raise KeyError(run_id)
+        sim.clear()
+        if run_id == "NOW":
+            self.now_consumed = False
+
+    def state(self, run_id: Optional[str] = None) -> Any:
+        with self.lock:
+            if run_id is None:
+                return {rid: sim.snapshot() for rid, sim in self.runs.items()}
+            sim = self.runs.get(run_id)
+            if sim is None:
+                raise KeyError(run_id)
+            return sim.snapshot()
+
+
+# ============================================================================
+# WEBSOCKET FEED
+# ============================================================================
+
+
+PERSISTENCE = Persistence(DB_PATH)
+CONTROLLER = SimulationController(PERSISTENCE)
+
+
+async def websocket_loop() -> None:
+    debug_count = 0
+    while True:
+        try:
+            print(f"[WS] connecting to {WEBSOCKET_URI}")
+            async with websockets.connect(
+                WEBSOCKET_URI,
+                ping_interval=20,
+                ping_timeout=20,
+                max_size=64 * 1024 * 1024,
+            ) as ws:
+                print("[WS] connected")
+                try:
+                    await ws.send(json.dumps({"action": "subscribe", "channel": "ticks"}))
+                except Exception:
+                    pass
+
+                async for raw in ws:
+                    try:
+                        if isinstance(raw, bytes):
+                            raw = raw.decode("utf-8", errors="replace")
+                        payload = json.loads(raw)
+
+                        if isinstance(payload, list):
+                            records = payload
+                        elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
+                            records = payload["data"]
+                        elif isinstance(payload, dict):
+                            records = [payload]
+                        else:
+                            continue
+
+                        for tick in records:
+                            if not isinstance(tick, dict):
+                                continue
+                            if str(tick.get("type", "")).lower() == "eod_ivs":
+                                continue
+
+                            CONTROLLER.book.ingest(tick)
+                            CONTROLLER.on_market_tick()
+
+                            debug_count += 1
+                            if debug_count <= 10:
+                                print(
+                                    "[FEED]",
+                                    tick.get("type"),
+                                    tick.get("symbol", tick.get("sym")),
+                                    tick.get("expiry"),
+                                    tick.get("strike"),
+                                    tick.get("ltp"),
+                                )
+                    except Exception as exc:
+                        print(f"[WS MESSAGE ERROR] {exc!r}")
+        except Exception as exc:
+            print(f"[WS LOOP ERROR] {exc!r}")
+            await asyncio.sleep(2.0)
+
+
+def start_ws_thread() -> None:
+    asyncio.run(websocket_loop())
+
+
+# ============================================================================
+# HTTP API
+# ============================================================================
+
+
+class SimulationHandler(BaseHTTPRequestHandler):
+    server_version = "NiftyMinuteSimulation/1.0"
+
+    def _send(self, payload: Any, status: int = 200, content_type: str = "application/json") -> None:
+        if content_type.startswith("application/json"):
+            body = json.dumps(json_clean(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        elif isinstance(payload, bytes):
+            body = payload
+        else:
+            body = str(payload).encode("utf-8")
+
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length) if length else b"{}"
+        data = json.loads(raw or b"{}")
+        if not isinstance(data, dict):
+            raise ValueError("JSON body must be an object")
+        return data
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+
+        if path == "/":
+            index = FRONTEND_DIR / "index.html"
+            if not index.exists():
+                self._send({"error": "frontend/index.html not found"}, 500)
+                return
+            self._send(index.read_bytes(), 200, "text/html; charset=utf-8")
+            return
+
+        if path in ("/app.js", "/styles.css"):
+            file_path = FRONTEND_DIR / path.lstrip("/")
+            if not file_path.exists():
+                self._send({"error": "asset not found"}, 404)
+                return
+            content_type = "application/javascript; charset=utf-8" if path.endswith(".js") else "text/css; charset=utf-8"
+            self._send(file_path.read_bytes(), 200, content_type)
+            return
+
+        if path == "/api/health":
+            with CONTROLLER.lock:
+                self._send(
+                    {
+                        "status": "OK",
+                        "websocket": WEBSOCKET_URI,
+                        "db": str(DB_PATH),
+                        "trade_date": CONTROLLER.trade_date,
+                        "selected_expiry": CONTROLLER.book.selected_expiry,
+                        "expiry_mode": CONTROLLER.book.expiry_mode,
+                        "option_quotes": len(CONTROLLER.book.options),
+                    }
+                )
+            return
+
+        if path == "/api/expiries":
+            with CONTROLLER.lock:
+                self._send(
+                    {
+                        "status": "SUCCESS",
+                        "mode": CONTROLLER.book.expiry_mode,
+                        "target_expiry": CONTROLLER.book.choose_expiry(),
+                        "selected_expiry": CONTROLLER.book.selected_expiry,
+                        "available": CONTROLLER.book.available_expiries(),
+                    }
+                )
+            return
+
+        if path == "/api/runs":
+            self._send(
+                {
+                    "status": "SUCCESS",
+                    "run_ids": list(RUN_IDS),
+                    "runs": CONTROLLER.state(),
+                }
+            )
+            return
+
+        if path.startswith("/api/runs/"):
+            run_id = path.rsplit("/", 1)[-1]
+            if run_id not in RUN_IDS:
+                self._send({"status": "ERROR", "error": "Unknown run", "run_id": run_id}, 404)
+                return
+            self._send(CONTROLLER.state(run_id))
+            return
+
+        self._send({"status": "ERROR", "error": "Not found"}, 404)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        try:
+            if path == "/api/select_expiry":
+                data = self._read_json()
+                ok, target, available = CONTROLLER.select_expiry(data.get("expiry"))
+                if not ok:
+                    self._send(
+                        {
+                            "status": "ERROR",
+                            "error": "Expiry is not currently available",
+                            "available": available,
+                        },
+                        400,
+                    )
+                    return
+                self._send(
+                    {
+                        "status": "SUCCESS",
+                        "target_expiry": target,
+                        "selected_expiry": CONTROLLER.book.selected_expiry,
+                        "available": available,
+                    }
+                )
+                return
+
+            if path == "/api/runs/NOW/start":
+                sim = CONTROLLER.start_now()
+                self._send(
+                    {
+                        "status": "SUCCESS",
+                        "run_id": "NOW",
+                        "state": sim.snapshot(),
+                    }
+                )
+                return
+
+            if path.startswith("/api/runs/") and path.endswith("/clear"):
+                run_id = path.split("/")[-2]
+                if run_id not in RUN_IDS:
+                    self._send({"status": "ERROR", "error": "Unknown run"}, 404)
+                    return
+                CONTROLLER.clear_run(run_id)
+                self._send({"status": "SUCCESS", "run_id": run_id})
+                return
+
+            self._send({"status": "ERROR", "error": "Not found"}, 404)
+        except Exception as exc:
+            print(f"[HTTP ERROR] {path}: {exc!r}")
+            self._send({"status": "ERROR", "error": str(exc)}, 409)
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        return
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+
+def main() -> None:
+    print("=" * 72)
+    print("NIFTY MINUTE STRADDLE SIMULATION")
+    print("=" * 72)
+    print(f"WebSocket : {WEBSOCKET_URI}")
+    print(f"HTTP      : http://127.0.0.1:{HTTP_PORT}")
+    print(f"Database  : {DB_PATH}")
+    print("Runs      : 0916 / 0917 / 0918 / 0919 / NOW")
+    print("DTE       : 09:15-15:40 IST session model")
+    print("Mode      : minute straddle only; no LUT/reference engine")
+    print("=" * 72)
+
+    ws_thread = threading.Thread(target=start_ws_thread, name="nifty-ws", daemon=True)
+    ws_thread.start()
+
+    server = ThreadingHTTPServer((HTTP_HOST, HTTP_PORT), SimulationHandler)
+    print(f"[HTTP] listening on {HTTP_HOST}:{HTTP_PORT}")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[HTTP] stopping")
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

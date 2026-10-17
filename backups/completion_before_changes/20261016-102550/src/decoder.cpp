@@ -1,0 +1,728 @@
+#include "decoder.h"
+#include "market_feed.h"
+#include <stdexcept>
+#include <chrono>
+#include "parser_7208.h"
+#include "contract_loader.h"
+#include "analytics_engine.h"
+
+// ================================================================
+// LOCAL MONOTONIC CLOCK FOR DECODER LATENCY MEASUREMENTS
+// ================================================================
+
+static inline uint64_t decoder_steady_ns()
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count()
+    );
+}
+
+
+
+#include "ws_server.h"
+
+namespace Analytics {
+    void update_oi(const std::string& symbol, uint64_t oi);
+    void update_volume(const std::string& symbol, uint64_t vol);
+    void update_lpp(const std::string& symbol, double high, double low);
+}
+
+
+// ------------------------------------------------------------
+// Forward declarations for NSE transaction parsers.
+// Implementations are defined later in decoder.cpp.
+// ------------------------------------------------------------
+static void parse_17202(const uint8_t* b, size_t len);
+static void parse_7202(const uint8_t* b, size_t len);
+static void parse_17201(const uint8_t* b, size_t len);
+static void parse_7201(const uint8_t* b, size_t len);
+static void parse_7220(const uint8_t* b, size_t len);
+static void parse_17130(const uint8_t* b, size_t len);
+static void parse_7130(const uint8_t* b, size_t len);
+
+
+#include <vector>
+#include <iostream>
+#include <atomic>
+#include <lzo/lzo1z.h>
+#include <cstdint>
+#include <unordered_map>
+#include <string>
+#include <sstream>
+#include <algorithm>
+
+extern std::unordered_map<uint32_t, std::pair<std::string, Exchange>> TOKEN_MAP;
+extern std::unordered_map<uint32_t, std::pair<std::string, Exchange>> BSE_TOKEN_MAP;
+
+static uint64_t total_packets   = 0;
+static uint64_t dropped_packets = 0;
+static uint64_t parsed_packets  = 0;
+
+static inline uint16_t be16(const uint8_t* p)
+{
+    return ((uint16_t)p[0] << 8) | p[1];
+}
+
+
+static inline uint64_t be64(const uint8_t* p) {
+    return ((uint64_t)p[0] << 56) |
+           ((uint64_t)p[1] << 48) |
+           ((uint64_t)p[2] << 40) |
+           ((uint64_t)p[3] << 32) |
+           ((uint64_t)p[4] << 24) |
+           ((uint64_t)p[5] << 16) |
+           ((uint64_t)p[6] << 8)  |
+            (uint64_t)p[7];
+}
+
+static inline uint32_t be32(const uint8_t* p)
+{
+    return ((uint32_t)p[0] << 24) |
+           ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8)  |
+            (uint32_t)p[3];
+}
+
+// ======================================
+// BSE NFCAST DECOMPRESSION PARSER
+// ======================================
+class BseParser {
+    const uint8_t* buf;
+    size_t len;
+    size_t pos;
+
+public:
+    BseParser(const uint8_t* b, size_t l) : buf(b), len(l), pos(0) {}
+
+    bool eof() const { return pos >= len; }
+
+    uint8_t read_u8() {
+        if (pos + 1 > len) throw std::out_of_range("BSE u8");
+        return buf[pos++];
+    }
+
+    int16_t read_s16() {
+        if (pos + 2 > len) throw std::out_of_range("BSE u16");
+        int16_t v = (int16_t)((buf[pos] << 8) | buf[pos+1]);
+        pos += 2;
+        return v;
+    }
+
+    uint16_t read_u16() {
+        if (pos + 2 > len) throw std::out_of_range("BSE u16");
+        uint16_t v = (uint16_t)((buf[pos] << 8) | buf[pos+1]);
+        pos += 2;
+        return v;
+    }
+
+    uint32_t read_u32() {
+        if (pos + 4 > len) throw std::out_of_range("BSE u32");
+        uint32_t v = ((uint32_t)buf[pos] << 24) | ((uint32_t)buf[pos+1] << 16) | ((uint32_t)buf[pos+2] << 8) | buf[pos+3];
+        pos += 4;
+        return v;
+    }
+
+    uint64_t read_u64() {
+        if (pos + 8 > len) throw std::out_of_range("BSE u64");
+        uint64_t hi = read_u32();
+        uint64_t lo = read_u32();
+        return (hi << 32) | lo;
+    }
+
+    void skip(size_t n) {
+        if (pos + n <= len) pos += n;
+        else throw std::out_of_range("BSE skip");
+    }
+
+    int64_t read_compressed(int64_t base) {
+        if (pos + 2 > len) throw std::out_of_range("BSE compressed");
+        int16_t diff = read_s16();
+        if (diff == 32767) {
+            return read_u32(); // Fallback to 4 bytes if 32767 escape is hit
+        }
+        return base + diff;
+    }
+};
+
+static bool decompress_lzo(
+    const uint8_t* in,
+    size_t inlen,
+    std::vector<uint8_t>& out)
+{
+    static bool init = false;
+
+    if (!init)
+    {
+        if (lzo_init() != LZO_E_OK)
+            return false;
+        init = true;
+    }
+
+    out.resize(65536);
+    lzo_uint out_len = 65536;
+
+    int r = lzo1z_decompress(
+        in,
+        (lzo_uint)inlen,
+        out.data(),
+        &out_len,
+        nullptr
+    );
+
+    if (r != LZO_E_OK)
+        return false;
+
+    out.resize((size_t)out_len);
+    return true;
+}
+
+static void print_stats()
+{
+    static uint64_t last_print = 0;
+
+    if (total_packets - last_print >= 5000)
+    {
+        last_print = total_packets;
+
+        std::cout
+            << "[STATS] TOTAL=" << total_packets
+            << " PARSED=" << parsed_packets
+            << " DROPPED=" << dropped_packets
+            << "\n";
+    }
+}
+
+// Parse and decompress BSE NFCAST Message 2020 / 2021
+void parse_bse_nfcast(const uint8_t* buf, size_t len) {
+    BseParser p(buf, len);
+    if (len < 4) return;
+    uint32_t msg_type = p.read_u32();
+
+    if (len < 28) return; // Full header size is 28 bytes
+
+    // ----------------------------------
+    // SPOT INDEX BROADCAST (SENSEX/BANKEX)
+    // ----------------------------------
+    if (msg_type == 2011 || msg_type == 2012) {
+        p.skip(22);
+        uint16_t num_records = p.read_u16();
+        for (int i = 0; i < num_records; i++) {
+            if (p.eof()) break;
+            
+            p.skip(4); // Index Code
+            p.skip(16); // High, Low, Open, PrevClose
+            int32_t index_val_raw = p.read_u32();
+            double index_value = index_val_raw / 100.0;
+            
+            char index_id[8] = {0};
+            for (int j = 0; j < 7; j++) index_id[j] = p.read_u8();
+            p.skip(9); // Reserved fields
+            
+            std::string symbol(index_id);
+            symbol.erase(std::find(symbol.begin(), symbol.end(), '\0'), symbol.end());
+            
+            // Inject spot price into the analytics engine!
+            if (!symbol.empty() && index_value > 0) {
+                Analytics::update_underlying(symbol, index_value);
+            }
+        }
+        return;
+    }
+
+    if (msg_type != 2020 && msg_type != 2021) return;
+
+    p.skip(22); // Skip Res1(4), Res2(4), Res3(2), Time(8), Res4(2), Res5(2)
+    uint16_t num_records = p.read_u16();
+
+    for (int i = 0; i < num_records; i++) {
+        if (p.eof()) break;
+
+        uint32_t token = 0;
+        if (msg_type == 2020) {
+            token = p.read_u32();
+        } else {
+            const uint64_t extended_token = p.read_u64();
+            if (extended_token > UINT32_MAX) return; // Never alias a complex token.
+            token = static_cast<uint32_t>(extended_token);
+        }
+
+        // Skip: Trades(4), Vol(8), Val(8), Flags(4), MktType(2), Sess(2), LTPTime(6), Res9(2), Res10(2), Res11(8)
+        p.skip(46);
+
+        uint16_t num_price_points = p.read_u16();
+        p.skip(12); // Skip Timestamp(8), CloseRate(4)
+
+        int64_t ltq = p.read_u64();
+        int32_t ltp_raw = p.read_u32();
+        double ltp = ltp_raw / 100.0; // BSE prices have 2 decimal precision
+
+        // Parse 12 compressed stats fields using LTQ & LTP bases
+        for (int k = 0; k < 12; k++) {
+            // Indices 6, 7, 8 are Quantity fields (Ind Eq Qty, Tot Bid Qty, Tot Offer Qty)
+            p.read_compressed(k >= 6 && k <= 8 ? ltq : ltp_raw);
+        }
+
+        double best_bid = 0.0;
+        int32_t bid_price_base = ltp_raw;
+        int64_t bid_qty_base = ltq;
+
+        // ----------------------------------
+        // DECOMPRESS BEST BIDS
+        // ----------------------------------
+        for (int lvl = 0; lvl < num_price_points; lvl++) {
+            int16_t diff = p.read_s16();
+            if (diff == 32766) break; // 32766 terminates Best Bid loop
+
+            int32_t price_raw = (diff == 32767) ? p.read_u32() : (bid_price_base + diff);
+            if (lvl == 0) best_bid = price_raw / 100.0;
+
+            int64_t qty = p.read_compressed(bid_qty_base);
+            p.read_compressed(bid_qty_base); // Num Orders
+            p.read_compressed(bid_qty_base); // Implied Buy Qty
+            p.read_compressed(bid_qty_base); // Reserved
+
+            bid_price_base = price_raw;
+            bid_qty_base = qty;
+        }
+
+        double best_ask = 0.0;
+        int32_t ask_price_base = ltp_raw;
+        int64_t ask_qty_base = ltq;
+
+        // ----------------------------------
+        // DECOMPRESS BEST OFFERS
+        // ----------------------------------
+        for (int lvl = 0; lvl < num_price_points; lvl++) {
+            int16_t diff = p.read_s16();
+            if (diff == -32766) break; // -32766 terminates Best Offer loop
+
+            int32_t price_raw = (diff == 32767) ? p.read_u32() : (ask_price_base + diff);
+            if (lvl == 0) best_ask = price_raw / 100.0;
+
+            int64_t qty = p.read_compressed(ask_qty_base);
+            p.read_compressed(ask_qty_base); // Num Orders
+            p.read_compressed(ask_qty_base); // Implied Sell Qty
+            p.read_compressed(ask_qty_base); // Reserved
+
+            ask_price_base = price_raw;
+            ask_qty_base = qty;
+        }
+
+        // Publish raw SENSEX/BSE quotes even before analytics is ready.
+        if (BSE_TOKEN_MAP.find(token) != BSE_TOKEN_MAP.end())
+            publish_market_quote(Exchange::BSE, token, ltp, best_bid, best_ask);
+
+        // ----------------------------------
+        // PUSH TO ANALYTICS
+        // ----------------------------------
+        auto it = BSE_TOKEN_MAP.find(token);
+        if (it != BSE_TOKEN_MAP.end()) {
+            const std::string& symbol = it->second.first;
+            
+            const uint64_t analytics_rx_ns = decoder_steady_ns();
+
+            std::string msg =
+                Analytics::process_tick(
+                    symbol,
+                    ltp,
+                    best_bid,
+                    best_ask
+                );
+
+            const uint64_t analytics_done_ns =
+                decoder_steady_ns();
+
+            const uint64_t analytics_latency_ns =
+                analytics_done_ns >= analytics_rx_ns
+                    ? analytics_done_ns - analytics_rx_ns
+                    : 0;
+
+            static std::atomic<uint64_t>
+                analytics_diag_count{0};
+
+            const uint64_t ad =
+                analytics_diag_count.fetch_add(
+                    1,
+                    std::memory_order_relaxed
+                );
+
+            if (
+                analytics_latency_ns
+                    > 10'000'000ULL
+                &&
+                (ad % 100) == 0
+            ) {
+                std::cout
+                    << "[ANALYTICS LATENCY]"
+                    << " symbol=" << symbol
+                    << " latency_ms="
+                    << (
+                        analytics_latency_ns
+                        / 1'000'000.0
+                    )
+                    << std::endl;
+            }
+
+            static std::atomic<int> pt_diag_count{0};
+            int pt_n = pt_diag_count.fetch_add(1);
+
+            if (pt_n < 40)
+            {
+                std::cout
+                    << "[PROCESS_TICK DIAG] symbol=" << symbol
+                    << " ltp=" << ltp
+                    << " bid=" << best_bid
+                    << " ask=" << best_ask
+                    << " result_bytes=" << msg.size()
+                    << std::endl;
+
+                if (!msg.empty())
+                {
+                    std::cout
+                        << "[PROCESS_TICK JSON] "
+                        << msg.substr(0, 800)
+                        << std::endl;
+                }
+            }
+
+            if (!msg.empty()) {
+                broadcast_raw(msg);
+            } else if (symbol.size() >= 6 &&
+                       symbol.compare(symbol.size()-6, 6, "|0|FUT") == 0) {
+                const auto p1 = symbol.find('|');
+                const auto p2 = symbol.find('|', p1 + 1);
+                std::ostringstream q;
+                q << "{\"type\":\"future_quote\",\"symbol\":\"" << symbol
+                  << "\",\"expiry\":\"" << symbol.substr(p1+1,p2-p1-1)
+                  << "\",\"ltp\":" << ltp << ",\"bid1\":" << best_bid
+                  << ",\"ask1\":" << best_ask << "}";
+                broadcast_raw(q.str());
+            }
+        }
+    }
+}
+
+
+// ======================================
+// NSE FO PARSER IMPLEMENTATIONS
+// ======================================
+
+static void dump_market_record(const char* tag, const uint8_t* p, size_t n)
+{
+    static int count = 0;
+
+    if (count >= 20)
+        return;
+
+    ++count;
+
+    std::cout << "[" << tag << " RAW] len=" << n << " bytes=";
+
+    size_t dump_n = (n < 80) ? n : 80;
+
+    for (size_t i = 0; i < dump_n; ++i)
+    {
+        std::cout
+            << std::hex
+            << static_cast<int>(p[i])
+            << (i + 1 < dump_n ? " " : "");
+    }
+
+    std::cout << std::dec << std::endl;
+}
+
+static void parse_17202(const uint8_t* b, size_t len) {
+    dump_market_record("17202", b, len);
+    if (len < 42) return;
+    uint16_t recs = be16(b + 40);
+    size_t offset = 42;
+    for (uint16_t i = 0; i < recs; i++) {
+        if (offset + 38 > len) break;
+        uint32_t token = be32(b + offset);
+
+        {
+            auto dbg_it = TOKEN_MAP.find(token);
+
+            if (dbg_it != TOKEN_MAP.end())
+            {
+                static int token_diag = 0;
+
+                if (token_diag < 30)
+                {
+                    ++token_diag;
+
+                    std::cout
+                        << "[17202 TOKEN]"
+                        << " token=" << token
+                        << " symbol=" << dbg_it->second.first
+                        << " exchange=" << static_cast<int>(dbg_it->second.second)
+                        << std::endl;
+                }
+            }
+
+            else
+            {
+                static int missing_diag = 0;
+
+                if (missing_diag < 10)
+                {
+                    ++missing_diag;
+                    std::cout
+                        << "[17202 TOKEN MISS]"
+                        << " token=" << token
+                        << std::endl;
+                }
+            }
+        }
+
+        uint64_t oi = be64(b + offset + 14);
+        auto it = TOKEN_MAP.find(token);
+        if (it != TOKEN_MAP.end()) {
+            Analytics::update_oi(it->second.first, oi);
+            publish_market_oi(Exchange::NSE, token, oi);
+        }
+        offset += 38;
+    }
+}
+
+static void parse_7202(const uint8_t* b, size_t len) {
+    dump_market_record("7202", b, len);
+    if (len < 42) return;
+    uint16_t recs = be16(b + 40);
+    size_t offset = 42;
+    for (uint16_t i = 0; i < recs; i++) {
+        if (offset + 26 > len) break;
+        uint32_t token = be32(b + offset);
+        uint32_t oi = be32(b + offset + 14);
+        auto it = TOKEN_MAP.find(token);
+        if (it != TOKEN_MAP.end()) {
+            Analytics::update_oi(it->second.first, oi);
+            publish_market_oi(Exchange::NSE, token, oi);
+        }
+        offset += 26;
+    }
+}
+
+static void parse_17201(const uint8_t* b, size_t len) {
+    dump_market_record("17201", b, len);
+    if (len < 42) return;
+    uint16_t recs = be16(b + 40);
+    size_t offset = 42;
+    for (uint16_t i = 0; i < recs; i++) {
+        if (offset + 90 > len) break;
+        uint32_t token = be32(b + offset);
+        uint64_t oi = be64(b + offset + 82);
+        auto it = TOKEN_MAP.find(token);
+        if (it != TOKEN_MAP.end()) {
+            Analytics::update_oi(it->second.first, oi);
+            publish_market_oi(Exchange::NSE, token, oi);
+        }
+        offset += 90;
+    }
+}
+
+static void parse_7201(const uint8_t* b, size_t len) {
+    dump_market_record("7201", b, len);
+    if (len < 42) return;
+    uint16_t recs = be16(b + 40);
+    size_t offset = 42;
+    for (uint16_t i = 0; i < recs; i++) {
+        if (offset + 86 > len) break;
+        uint32_t token = be32(b + offset);
+        uint32_t oi = be32(b + offset + 82);
+        auto it = TOKEN_MAP.find(token);
+        if (it != TOKEN_MAP.end()) {
+            Analytics::update_oi(it->second.first, oi);
+            publish_market_oi(Exchange::NSE, token, oi);
+        }
+        offset += 86;
+    }
+}
+
+static void parse_7220(const uint8_t* b, size_t len) {
+    if (len < 44) return;
+    uint32_t recs = be32(b + 40);
+    size_t offset = 44;
+    for (uint32_t i = 0; i < recs; i++) {
+        if (offset + 12 > len) break;
+        uint32_t token = be32(b + offset);
+        double high = be32(b + offset + 4) / 100.0;
+        double low = be32(b + offset + 8) / 100.0;
+        auto it = TOKEN_MAP.find(token);
+        if (it != TOKEN_MAP.end()) Analytics::update_lpp(it->second.first, high, low);
+        offset += 12;
+    }
+}
+
+static void parse_17130(const uint8_t* b, size_t len) {
+    if (len < 40) return;
+    uint16_t recs = be16(b + 12);
+    size_t offset = 40;
+    for (uint16_t i = 0; i < recs; i++) {
+        if (offset + 12 > len) break;
+        uint32_t token = be32(b + offset);
+        uint64_t oi = be64(b + offset + 4);
+        auto it = TOKEN_MAP.find(token);
+        if (it != TOKEN_MAP.end()) {
+            Analytics::update_oi(it->second.first, oi);
+            publish_market_oi(Exchange::NSE, token, oi);
+        }
+        offset += 12;
+    }
+}
+
+static void parse_7130(const uint8_t* b, size_t len) {
+    if (len < 40) return;
+    uint16_t recs = be16(b + 12);
+    size_t offset = 40;
+    for (uint16_t i = 0; i < recs; i++) {
+        if (offset + 8 > len) break;
+        uint32_t token = be32(b + offset);
+        uint32_t oi = be32(b + offset + 4);
+        auto it = TOKEN_MAP.find(token);
+        if (it != TOKEN_MAP.end()) {
+            Analytics::update_oi(it->second.first, oi);
+            publish_market_oi(Exchange::NSE, token, oi);
+        }
+        offset += 8;
+    }
+}
+
+void process_packet(Exchange exchange, const uint8_t* buf, size_t len)
+{
+    total_packets++;
+
+    if (exchange == Exchange::BSE) {
+        // BSE Direct NFCAST does not use the same LZO chunking layer as NSE
+        try {
+            parse_bse_nfcast(buf, len);
+            parsed_packets++;
+        } catch (const std::out_of_range&) {
+            dropped_packets++;
+        }
+        print_stats();
+        return;
+    }
+
+    // Exchange::NSE LZO decompression layer below
+    if (len < 4)
+    {
+        dropped_packets++;
+        print_stats();
+        return;
+    }
+
+    uint16_t packets = be16(buf + 2);
+
+    if (packets == 0 || packets > 50)
+    {
+        dropped_packets++;
+        print_stats();
+        return;
+    }
+
+    size_t pos = 4;
+
+    for (uint16_t i = 0; i < packets; i++)
+    {
+        if (pos + 2 > len)
+        {
+            dropped_packets++;
+            break;
+        }
+
+        uint16_t comp = be16(buf + pos);
+        pos += 2;
+
+        if (comp == 0 || comp > 2048)
+        {
+            dropped_packets++;
+            break;
+        }
+
+        if (pos + comp > len)
+        {
+            dropped_packets++;
+            break;
+        }
+
+        std::vector<uint8_t> dec;
+
+        bool ok = decompress_lzo(buf + pos, comp, dec);
+
+        pos += comp;
+
+        if (!ok)
+        {
+            dropped_packets++;
+            continue;
+        }
+
+        if (dec.size() <= 18)
+        {
+            dropped_packets++;
+            continue;
+        }
+
+        const uint8_t* b = dec.data() + 8;
+        size_t blen = dec.size() - 8;
+
+        if (blen < 12)
+        {
+            dropped_packets++;
+            continue;
+        }
+
+        uint16_t tx = be16(b + 10);
+
+        static int tx_diag_count = 0;
+        if (tx_diag_count < 20)
+        {
+            ++tx_diag_count;
+            std::cout << "[TX DIAG] UDP Message Type (tx) = " << tx << " | length = " << blen << std::endl;
+        }
+
+        switch (tx)
+        {
+            case 17208:
+            case 7208:
+                parse_7208(b, blen);
+                parsed_packets++;
+                break;
+            case 17202:
+                parse_17202(b, blen);
+                parsed_packets++;
+                break;
+            case 7202:
+                parse_7202(b, blen);
+                parsed_packets++;
+                break;
+            case 17201:
+                parse_17201(b, blen);
+                parsed_packets++;
+                break;
+            case 7201:
+                parse_7201(b, blen);
+                parsed_packets++;
+                break;
+            case 7220:
+                parse_7220(b, blen);
+                parsed_packets++;
+                break;
+            case 17130:
+                parse_17130(b, blen);
+                parsed_packets++;
+                break;
+            case 7130:
+                parse_7130(b, blen);
+                parsed_packets++;
+                break;
+            default:
+                break;
+        }
+    }
+
+    print_stats();
+}

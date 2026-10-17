@@ -1,0 +1,43 @@
+services:
+  redis-cache:
+    image: redis:alpine
+    container_name: dalal_redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  solidjs-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: dalal_ui
+    ports:
+      - "3000:80"
+    restart: always
+
+  kdb-database:
+    build:
+      context: .
+      dockerfile: Dockerfile.kdb
+    container_name: dalal_kdb
+    tty: true
+    stdin_open: true
+    command: ["q", "tick.q", "-p", "5000"]
+    ports:
+      - "5000:5000"  # Expose IPC port for the C++ Bridge
+    volumes:
+      - ./src/services/kdb:/q_scripts # Mount directory for our q schemas
+    restart: always
+
+  llm-api:
+    image: python:3.12-slim
+    container_name: dalal_llm_api
+    working_dir: /app
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    ports:
+      - "5001:5001"
+    command: sh -c "pip install fastapi uvicorn requests pydantic python-dotenv httpx && cd $$(dirname $$(find /app -name backend_api.py | head -n 1)) && uvicorn backend_api:app --host 0.0.0.0 --port 5001"
+    restart: unless-stopped
