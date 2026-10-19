@@ -1,0 +1,33 @@
+{
+  "checked_at": "2026-10-19T15:13:38.768923+05:30",
+  "duration_seconds": 50,
+  "logs": "logs/system-20261019-151226-46376",
+  "clients": [
+    {
+      "symbol": "NIFTY",
+      "quotes": 49,
+      "rows_with_ltp": 1323,
+      "heartbeats": 10,
+      "disconnected_heartbeats": 0,
+      "max_quote_age_seconds": 0.95
+    },
+    {
+      "symbol": "SENSEX",
+      "quotes": 49,
+      "rows_with_ltp": 991,
+      "heartbeats": 10,
+      "disconnected_heartbeats": 0,
+      "max_quote_age_seconds": 1.001
+    },
+    {
+      "symbol": "RELIANCE",
+      "quotes": 49,
+      "rows_with_ltp": 1308,
+      "heartbeats": 10,
+      "disconnected_heartbeats": 0,
+      "max_quote_age_seconds": 0.969
+    }
+  ],
+  "upstream_disconnects": 0,
+  "backpressure_events": 0
+}

@@ -88,8 +88,8 @@
     },
     {
       "path": "KE2_STARTUP_AND_API.md",
-      "bytes": 23157,
-      "sha256": "17eb83ef28a2475caee8708adaecbf8a500abb8bd2e7c330e456bbcf01ce514d"
+      "bytes": 23399,
+      "sha256": "9cbdbd9b651ac82667cc4c4523b7690850391da1b7c44499fd767a39639a56ec"
     },
     {
       "path": "KE2_WebSim_Feed_Spec(1).json",
@@ -198,8 +198,8 @@
     },
     {
       "path": "ke2_feed_server.py",
-      "bytes": 20288,
-      "sha256": "177a3d166ab60c15c680661c033cf59b342ec9ff4f0f688fa8109e7d0629db4f"
+      "bytes": 21060,
+      "sha256": "2bb286f15ddd24edffabd2e883c9227c8705c45a5082814cd1bb3956ba541846"
     },
     {
       "path": "ke2_test_api.py",
@@ -1318,8 +1318,8 @@
     },
     {
       "path": "test_ke2_feed.py",
-      "bytes": 7057,
-      "sha256": "c71482209887321cf61e8406c70a3e6e3819fccc18745d94d1c9064222c8baea"
+      "bytes": 8107,
+      "sha256": "2c4d2db7ae8c90a59798d31db8ae875f5defb84a46ea884bf28bc50b55279efa"
     },
     {
       "path": "test_ke2_transport.py",
@@ -1612,6 +1612,21 @@
       "sha256": "d65d59c80579e98bc14105ae3012d6feabc4a6c8f575d89d16f15fc9e2c43131"
     },
     {
+      "path": "backups/source_disconnect_before_changes/20261019-093820/ke2_feed_server.py",
+      "bytes": 20288,
+      "sha256": "177a3d166ab60c15c680661c033cf59b342ec9ff4f0f688fa8109e7d0629db4f"
+    },
+    {
+      "path": "backups/source_disconnect_before_changes/20261019-093820/test_ke2_feed.py",
+      "bytes": 7057,
+      "sha256": "c71482209887321cf61e8406c70a3e6e3819fccc18745d94d1c9064222c8baea"
+    },
+    {
+      "path": "backups/source_disconnect_before_changes/20261019-093820/src/ws_server.cpp",
+      "bytes": 46911,
+      "sha256": "080ab5b3e586042e291d1de952bde3882cd26dfe8c74873596d9a301fa50f7d0"
+    },
+    {
       "path": "config/BSEIndexTokens.csv",
       "bytes": 8850776,
       "sha256": "eec883ef1da858b2dccfff0cf9f41eb4b4939265d1aeef68b9c4463661b37ae0"
@@ -1747,6 +1762,11 @@
       "sha256": "f0567d91cffc18a258ca4442cfad2d76bbaa173fb5e5dfccc538092a6f65bf16"
     },
     {
+      "path": "docs/verification/SOURCE_DISCONNECT_FIX.md",
+      "bytes": 2213,
+      "sha256": "0d4374c79b17fa22ab3f9aa7ec4ad4f47766a8b442252f96e7fe9d94f7d8e991"
+    },
+    {
       "path": "docs/verification/latest_checks.json",
       "bytes": 3684,
       "sha256": "71c22f90d8448b94b445c6f611ab4f5f167c634a7a13c0ed82b453833b75f17b"
@@ -1765,6 +1785,11 @@
       "path": "docs/verification/run_all_repeat_restart.json",
       "bytes": 1167,
       "sha256": "e783c3aa78ca7d0a3a57a3f78e5ce440e08b1457cf939765780fb442f850a0dc"
+    },
+    {
+      "path": "docs/verification/source_connection_checks.json",
+      "bytes": 758,
+      "sha256": "e3849643cd8a4126751adf9c19b57a18653660d55e2a79e98b14762eb7a0a360"
     },
     {
       "path": "frontend/app.js",
@@ -2623,8 +2648,8 @@
     },
     {
       "path": "src/ws_server.cpp",
-      "bytes": 46911,
-      "sha256": "080ab5b3e586042e291d1de952bde3882cd26dfe8c74873596d9a301fa50f7d0"
+      "bytes": 47338,
+      "sha256": "15edb07dfbd34c8fecaaeb85dddd12473b77c3183369f9ca6327d077c537db66"
     },
     {
       "path": "src/services/feed_handler/feed_handler.cpp",

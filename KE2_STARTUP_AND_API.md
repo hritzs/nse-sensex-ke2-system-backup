@@ -521,6 +521,7 @@ arrives. This is a basic liveness check, not a guarantee of exchange completenes
 | --- | --- |
 | Cannot connect to 9002 | Adapter terminal, port occupancy, Python environment |
 | Source connection refused | Decoder on 9001 and source URL |
+| Source disconnected: no close frame received or sent | Internal decoder-to-adapter failure; use the updated binary/adapter, run the full stack, inspect source close/backpressure diagnostics; see docs/verification/SOURCE_DISCONNECT_FIX.md |
 | Connected but no market_quote data | Confirm NEW binary; old wildcard WS accepts the path but sends legacy messages |
 | BSE STALE; NSE active | BSE multicast membership, interface, port 2004 delivery, current BSE token matches |
 | future_quote_unavailable | Exact-expiry future exists but has not supplied a quote |

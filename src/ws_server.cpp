@@ -404,8 +404,15 @@ void start_ws_server(int port)
             MARKET_SOURCE_CLIENTS.fetch_add(1, std::memory_order_relaxed);
             ws->subscribe("market_source");
         };
-        source_behavior.close = [](auto*, int, std::string_view) {
+        source_behavior.close = [](auto* ws, int code, std::string_view reason) {
             MARKET_SOURCE_CLIENTS.fetch_sub(1, std::memory_order_relaxed);
+            std::cout << "[WS SOURCE CLOSE] code=" << code
+                      << " buffered_bytes=" << ws->getBufferedAmount()
+                      << " reason=" << reason << std::endl;
+        };
+        source_behavior.dropped = [](auto* ws, std::string_view, uWS::OpCode) {
+            std::cout << "[WS SOURCE BACKPRESSURE] buffered_bytes="
+                      << ws->getBufferedAmount() << std::endl;
         };
         source_behavior.maxBackpressure = 1024 * 1024;
         source_behavior.closeOnBackpressureLimit = true;

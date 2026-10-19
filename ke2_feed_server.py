@@ -251,8 +251,14 @@ class Feed:
             return
         self.last_by_exchange[instrument.exchange] = time.monotonic()
         for sub in self.sessions.values():
-            before = sub.instruments.copy()
-            if event["type"] == "market_quote" and instrument.option_type is None:
+            # Only this rule's exact-expiry future can move its strike window.
+            # Copying a large subscription on every unrelated option tick can
+            # block the socket reader long enough to hit upstream backpressure.
+            if (event["type"] == "market_quote" and instrument.option_type is None
+                    and any(rule["symbol"] == instrument.symbol
+                            and rule["expiry"] == instrument.expiry
+                            for rule in sub.rules)):
+                before = sub.instruments
                 self.resolve(sub)
                 sub.dirty.update(sub.instruments - before)
             if iid in sub.instruments:
@@ -274,6 +280,8 @@ class Feed:
 
     async def source(self, uri):
         while True:
+            connected_at = time.monotonic()
+            received_messages = 0
             try:
                 async with websockets.connect(uri, max_size=4 * 1024 * 1024) as ws:
                     self.quotes.clear()
@@ -283,6 +291,7 @@ class Feed:
                         self.resolve(sub)
                         sub.dirty.update(sub.instruments)
                     async for message in ws:
+                        received_messages += 1
                         try:
                             event = json.loads(message)
                             if isinstance(event, dict):
@@ -290,7 +299,10 @@ class Feed:
                         except (ValueError, TypeError, OverflowError):
                             logging.warning("Rejected invalid source event")
             except (OSError, websockets.ConnectionClosed) as exc:
-                logging.warning("Source disconnected: %s", exc)
+                logging.warning(
+                    "Source disconnected after %.1fs / %d messages: %s; received_close=%s sent_close=%s",
+                    time.monotonic() - connected_at, received_messages, exc,
+                    getattr(exc, "rcvd", None), getattr(exc, "sent", None))
             finally:
                 self.source_connected = False
             await asyncio.sleep(2)

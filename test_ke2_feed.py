@@ -33,6 +33,27 @@ class FeedTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    async def test_only_matching_future_recenters_subscription(self):
+        from unittest.mock import patch
+        from dataclasses import replace
+        sub = Subscription()
+        self.feed.subscribe(sub, self.request())
+        self.feed.sessions["test"] = sub
+        original = sub.instruments.copy()
+        # Neither another symbol nor another expiry can move this window.
+        other = replace(self.master.by_id[100], instrument_id=999, token=999,
+                        expiry="2026-11-03")
+        self.master.by_key[("NSE",999)] = other
+        with patch.object(self.feed, "resolve", wraps=self.feed.resolve) as resolve:
+            self.feed.ingest(self.tick(200, exchange="BSE"))
+            self.feed.ingest(self.tick(999))
+            self.feed.ingest(self.tick(101))
+            resolve.assert_not_called()
+            self.assertEqual(sub.instruments, original)
+            self.feed.ingest(self.tick(100))
+            resolve.assert_called_once_with(sub)
+            self.assertGreater(len(sub.instruments),len(original))
+
     def request(self, symbol="NIFTY"):
         return {"type":"subscribe", "expiry":"2026-10-27", "underlyings":[
             {"symbol":symbol,"segment":"FO_IDX" if symbol in ("NIFTY","SENSEX") else "FO_STK","future":True,
