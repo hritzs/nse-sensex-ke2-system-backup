@@ -58,8 +58,8 @@
     },
     {
       "path": "GAMMA_WEEKLY_SIMULATOR.md",
-      "bytes": 10660,
-      "sha256": "edf2bdc8c2e23fb1b6b2cb0f15055e9de4095ba4e9630865ad08f959e802005b"
+      "bytes": 10212,
+      "sha256": "987405dcf635728cae83f8785601eeb797757fc4ffedd1f4cae2cb7427a0fe41"
     },
     {
       "path": "GammaShort_Backtest_Final.py",
@@ -83,13 +83,13 @@
     },
     {
       "path": "KE2_FEED_IMPLEMENTATION.md",
-      "bytes": 8791,
-      "sha256": "0766eee7e74d67916059282786a042c38b6f3bfd081000745102d04e44a6d67d"
+      "bytes": 10024,
+      "sha256": "1aa628bdd0661ba7d399a884eea7c83742bd3709000db51ad1926fc9dc1acc2e"
     },
     {
       "path": "KE2_STARTUP_AND_API.md",
-      "bytes": 20762,
-      "sha256": "a7b244ddad329a9f48737aa11523aaa70d871ab8b25ec734af4ada312709fe32"
+      "bytes": 21494,
+      "sha256": "a966c20f2137e21ec9791de8418cd6fd67209a8ed63b1225c52eb42d86bfc0ce"
     },
     {
       "path": "KE2_WebSim_Feed_Spec(1).json",
@@ -103,8 +103,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 1463,
-      "sha256": "c4c3c87f4b58a393b94f52bfd956c51135aa6ee8968cd1fcc56f387f0853f5fc"
+      "bytes": 2660,
+      "sha256": "253e5e8eacce0e1f8e0a23bd103d29e438211f7c1d2ded01230809d4dffc0989"
     },
     {
       "path": "TP_FO_Trimmed_NNF_PROTOCOL_9_46_20260107172010.pdf",
@@ -188,13 +188,13 @@
     },
     {
       "path": "gamma_weekly_engine.py",
-      "bytes": 15726,
-      "sha256": "09b9c694ef8258f49f5f6ef412bfa8a81dbf334e68a11dff545bd5f24054b9e7"
+      "bytes": 16549,
+      "sha256": "a09e6412516378ff0f0750abe20034e175cb57eff3f2927d5685f0802e82abf4"
     },
     {
       "path": "gamma_weekly_server.py",
-      "bytes": 20039,
-      "sha256": "c9440e8c5fcac240b732f145930a90b28031cb46b94761fcd99d07894ae0c790"
+      "bytes": 22184,
+      "sha256": "823c42d71553f3dd29f3e437f7c535a84e914c34abfb6db05a7e33bdb5de1239"
     },
     {
       "path": "ke2_feed_server.py",
@@ -1298,8 +1298,8 @@
     },
     {
       "path": "start_system.sh",
-      "bytes": 11631,
-      "sha256": "81b922c42eb409df7ef00e25cd7b5d56bd41c3d739bbc49110f46338662d9969"
+      "bytes": 11981,
+      "sha256": "da1e00511d6ed54f989f7f068f6761a9be7a3728513fe7b9e032402a9129865d"
     },
     {
       "path": "stop.sh",
@@ -1587,6 +1587,11 @@
       "sha256": "5cb3c60857890312891fe2a2d61aa4bbe7fe9446015cfd88a719d21f7ab71e23"
     },
     {
+      "path": "backups/master_refresh/20261019-073141/GreekTokens.csv",
+      "bytes": 126898815,
+      "sha256": "d65d59c80579e98bc14105ae3012d6feabc4a6c8f575d89d16f15fc9e2c43131"
+    },
+    {
       "path": "config/BSEIndexTokens.csv",
       "bytes": 8850776,
       "sha256": "eec883ef1da858b2dccfff0cf9f41eb4b4939265d1aeef68b9c4463661b37ae0"
@@ -1693,28 +1698,43 @@
     },
     {
       "path": "docs/architecture/ADR.md",
-      "bytes": 4921,
-      "sha256": "1f01df8150406b7b3aca939128d38bc380456a55bfe97907d8b5f14b0bd29706"
+      "bytes": 5926,
+      "sha256": "b3b17e1327cf0c4ede10b9cfdc1ef0acc4f236dfee24dab5cee5dd80ffb7c95e"
     },
     {
       "path": "docs/architecture/HLD.md",
-      "bytes": 20055,
-      "sha256": "ec01f0c1d763438ca1d2f62c9e8584f3fe0940fffc35943557ac84fd2dcb3006"
+      "bytes": 19671,
+      "sha256": "45542e6a020bf031a2a0388e7f2d617bf57f1c2e435f2e6fd4e57ef9698b14ca"
     },
     {
       "path": "docs/architecture/LLD.md",
-      "bytes": 36279,
-      "sha256": "049c0a82889838f5f5434a280103982526700dc012618bbe14e162e8b537cbad"
+      "bytes": 36907,
+      "sha256": "3e383988c9195a6af75d6c6245a6feb3b375ae010e3cc407c0ef445710f8e1bd"
     },
     {
       "path": "docs/architecture/README.md",
-      "bytes": 1494,
-      "sha256": "8c9d1156de4e0fcc83df765c027748e1ff3e62f994196a7a1a3a2b88daf06dcc"
+      "bytes": 1807,
+      "sha256": "e57eea040ae6f8dc6f6e560bdc8f0d711ed72ea129ea767c724b1a7ce5a0e4d3"
     },
     {
       "path": "docs/backup/BACKUP_RESTORE.md",
-      "bytes": 7146,
-      "sha256": "1793ed789527fedead7b4be82278f7e61cbce071a613b6a31a5f8d2563580575"
+      "bytes": 7709,
+      "sha256": "383674e5af89974fa6f12e6cbae55e6e29d8bbca9b785e2622fdfdc711c1d63b"
+    },
+    {
+      "path": "docs/verification/DEPLOYMENT.md",
+      "bytes": 2539,
+      "sha256": "81fc006af89b5ddefbcddb2fe418fc04ec2a4de5aeb7dac7306b19da7fd11a54"
+    },
+    {
+      "path": "docs/verification/latest_checks.json",
+      "bytes": 3684,
+      "sha256": "71c22f90d8448b94b445c6f611ab4f5f167c634a7a13c0ed82b453833b75f17b"
+    },
+    {
+      "path": "docs/verification/latest_deployment.json",
+      "bytes": 2078,
+      "sha256": "f7d3f0c92af84eec6c60279d8acce5719bdfe9832f9520db35529b81a9d97298"
     },
     {
       "path": "frontend/app.js",
@@ -2233,8 +2253,8 @@
     },
     {
       "path": "scripts/backup_system.py",
-      "bytes": 12934,
-      "sha256": "f72ae873f95c145d746edcb05098a8d573ac18d988eda5f97717bacdfac95045"
+      "bytes": 13877,
+      "sha256": "0796aa6f53d347befee60b1408fff6f84a00d716f1aee9ff33c63ffcd68f9a9d"
     },
     {
       "path": "scripts/build.sh",
@@ -2293,8 +2313,8 @@
     },
     {
       "path": "shared/GreekTokens.csv",
-      "bytes": 126898815,
-      "sha256": "d65d59c80579e98bc14105ae3012d6feabc4a6c8f575d89d16f15fc9e2c43131"
+      "bytes": 127436849,
+      "sha256": "f779a1da2be9312ea0e957085fcef7581a5aaca3ef26a755b984054e1bd22701"
     },
     {
       "path": "shared/GreekTokens.csv.backup_before_20260908_update_20260908_054747",
@@ -2308,8 +2328,8 @@
     },
     {
       "path": "shared/NSE_MASTER_PROVENANCE.json",
-      "bytes": 820,
-      "sha256": "9622033d1d40651bc404fbcd912c56222c8c27db37eae5114fc633dbc5f2e1bc"
+      "bytes": 751,
+      "sha256": "29223bdbecc9c15c1393cd4d15d67f96935636ed26cdbfb2e6521c23732174d1"
     },
     {
       "path": "shared/cm_bhavcopy/NSEcm09SEP2026bhav.csv",
@@ -2608,8 +2628,8 @@
     },
     {
       "path": "tests/test_gamma_weekly.py",
-      "bytes": 11575,
-      "sha256": "d9fd3447bae67d03496def4ae3d2a0e1f9dbd5d0ea46c58e5ff3b7e91c0e2fbe"
+      "bytes": 13709,
+      "sha256": "14b5dd10e245119b3e4206f6caef92dbea3612d8e49ab0c04e1a0107e731c997"
     },
     {
       "path": "tests/test_launcher.py",
@@ -2618,8 +2638,8 @@
     },
     {
       "path": "tests/test_system_operations.py",
-      "bytes": 4646,
-      "sha256": "516969d6fc21f1b0742f8f0c8eef19f1bae376c1d374ae9ac94957535469b346"
+      "bytes": 6013,
+      "sha256": "f8e6c3be055817e93baa9c6acfd4e65fdd51b6a918bfb07780bc2882eb4faa22"
     },
     {
       "path": "v4/simulation_server_2.py",

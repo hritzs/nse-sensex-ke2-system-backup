@@ -1,6 +1,6 @@
 # High-level design: NSE, SENSEX, KE2 and indicative-close system
 
-Design baseline: 16 October 2026, Asia/Kolkata.
+Design baseline: 19 October 2026, Asia/Kolkata.
 Status: implemented architecture with explicitly listed validation gaps.
 Owner/account: hritzs. Workspace: nse-fo-low-latency-decoder.
 
@@ -133,10 +133,13 @@ BSE OI and undeclared quantities are not synthesized.
 - A weekly simulator cycle and monthly KE2 cycle do not override one another.
   Separate KE2 connections are required for different requested expiry cycles.
 
-The inspected NSE CSV is stale relative to this baseline and does not contain
-intermediate October weeklies. Missing tokens cannot be repaired by an expiry
-dropdown or inferred calendar date. The generator/authoritative refresh process
-has not been established in this repository.
+The authoritative export is the share-root GreekTokens.csv, imported through
+scripts/refresh_market_inputs.ps1 and scripts/refresh_master.py. Checksum and
+coverage validation precede atomic installation, with a prior-master rollback
+copy. The 19 October import contains six near-term NIFTY expiries. One source
+PAGEIND token written as scientific notation is explicitly excluded by both
+loaders rather than guessed. The external publisher owns exchange-master
+generation; this repository owns repeatable validated import and provenance.
 
 ## 7. Supported KE2 subset
 
@@ -244,13 +247,14 @@ Install API dependencies in .venv-ke2-api separately from the feed environment.
 Manual activation:
 
 ```bash
-bash start_system.sh --reuse-existing --with-api
+bash start_system.sh --restart --gamma-weekly --with-api --lan
 ```
 
-This command only starts missing services when explicitly run. New owned
-children have separate logs. Ctrl+C cleans up owned children, never reused
-services. The launcher does not automatically download contracts or run
-network-share maintenance scripts.
+This command replaces positively identified project listeners and starts
+the corrected decoder, adapter, Gamma, indicative and API tester. Unknown
+listeners abort before signals. --lan exposes only the KE2 feed. Input refresh
+is explicit through --refresh-inputs; it does not invoke the indicative
+maintenance script. Ctrl+C cleans up newly owned child processes.
 
 See ../../KE2_STARTUP_AND_API.md and ../../KE2_FASTAPI_TESTER.md for precise
 commands, health interpretation, test requests, shutdown and rollback.
@@ -259,17 +263,17 @@ commands, health interpretation, test requests, shutdown and rollback.
 
 | ID | Finding | Consequence / required follow-up |
 | --- | --- | --- |
-| R01 | NSE master freshness/generator unresolved | Missing weekly coverage; obtain authoritative refresh process |
-| R02 | Main and indicative F&O parsers disagree on enhanced layouts | Main uses 214-byte records for both codes; indicative distinguishes 214/258 and offsets; verify against protocol/live captures before claiming wire correctness |
+| R01 | Master refresh implemented | Verified share export and atomic import restore actual weekly coverage; refresh remains an operator action |
+| R02 | Layout discrepancy corrected | Both match NNF 9.48 layouts; mixed raw/LZO and two-record tests pass; full live conformance is not claimed |
 | R03 | BSE xx.Token wire identity not live-certified | Fixture routing is not proof of current BSE token matches |
 | R04 | Exchange/trade timestamps absent | No valid exchange-time bars or exchange stale-price guarantee |
 | R05 | OI units not independently certified | Avoid unverified lots/quantity conversions or threshold assumptions |
 | R06 | Overflow and parallel processing | Loss/out-of-order completion possible; load-test and design sequencing if required |
 | R07 | Generic legacy quote recovery is incomplete | KE2 uses its own raw store/recovery; legacy behavior is not upgraded |
-| R08 | Holiday/calendar input absent | NEXT-weekly Tuesday arithmetic may not match holiday-adjusted listings |
+| R08 | Legacy holiday arithmetic retained | Gamma uses actual listed dates; the rollback simulator retains Tuesday-based NEXT estimation |
 | R09 | Existing indicative local-date handling depends on process environment | Calendar/session interpretation requires operational timezone verification |
 | R10 | In-memory API/KE2 sessions | Rebuild subscriptions after process restart; no durable replay |
-| R11 | New private GitHub repository requires account API access | Offline backup can be verified first; mark cloud pending until confirmed |
+| R11 | Public GitHub publication completed | hritzs/nse-sensex-ke2-system-backup; receipts verify commit and visibility; runtime/licenses stay offline |
 | R12 | Package/native dependencies outside source backup | Preserve version inventory and rebuild instructions; binaries alone are not a portable environment |
 
 ## 14. Verification baseline and document map
@@ -286,7 +290,7 @@ live exchange conformance tests.
 - ../backup/BACKUP_RESTORE.md: artifact inventory, verification and recovery.
 - Backup MANIFEST.json: exact source hashes, captured runtime and GitHub status.
 
-## GammaShort extension and explicit restart (16 October 2026)
+## GammaShort extension and explicit restart (19 October 2026)
 
 The user subsequently authorized a new simulator based on
 GammaShort_Backtest_Final.py, with five independent lanes for every weekly
@@ -307,10 +311,11 @@ flowchart LR
 ```
 
 Reference data is bound to date AND expiry. Current-week daily inputs are never
-reused for later expiries. Missing reference/event files block calculation;
-missing compatible LUTs are an explicit diagnostic and do not gate fixed lanes.
-The supplied 34,650-row Custom tables fail the new 52,920-row model contract.
-No new tables or market data are synthesized.
+reused for later expiries. As explicitly selected, missing daily references
+record REFERENCE_UNAVAILABLE while full fixed-trade mathematics continue.
+Missing events block sizing as WAITING_INPUTS. The exact five CW tables are
+present and match their 52,920-row shapes and expected YES counts. Old Custom
+tables remain separate. No market inputs or replacement LUTs are invented.
 
 The adapter retains the backtest's numerical functions, event sizing and costs,
 while disabling its separate production CW/NW selection. It removes historical
@@ -322,8 +327,8 @@ future observations exist; no exit tick is invented after the feed stops.
 
 Instrument masters do not identify weekly versus monthly contracts.
 Default discovery uses listed unexpired NIFTY options within 42 days; an
-explicit verified allowlist is supported. Missing current weeklies still
-require the authoritative updated master.
+explicit verified allowlist is supported. Current near-term coverage is loaded
+from the authoritative refreshed master rather than inferred weekday dates.
 
 `start_system.sh --restart --gamma-weekly --with-api` validates dependencies
 and required Gamma references before stopping anything. A helper identifies
@@ -332,8 +337,8 @@ and process start time. Unknown listeners abort the stop plan. Explicit restart
 includes indicative 8100 and optional API 9003; no broad process-name kill or
 bhavcopy maintenance launcher is used.
 
-New source and reference configuration hashes bind the Gamma database to its
-calculation version. Existing simulator state is untouched. The offline backup
+Source and reference hashes bind Gamma configuration per trade date. New-day
+reference updates can reuse the DB; same-day changes require a new DB path. Existing simulator state is untouched. The offline backup
 includes both implementations, both sets of data if present, the authoritative
 backtest, indicative server, model inputs, startup scripts, tests and these
 design documents. GitHub receives only sanitized current source.
@@ -341,23 +346,9 @@ design documents. GitHub receives only sanitized current source.
 See [Gamma operation/API](../../GAMMA_WEEKLY_SIMULATOR.md) for precise timing,
 response fields, deployment limitations and rollback.
 
-## Reference snapshots found during Windows-share verification
+## Current implementation references
 
-The exact daily CSV and event calendar from the configured Windows share were
-reachable and copied into data/gamma_inputs with file hashes in PROVENANCE.json.
-These remain private offline runtime data. The simulator/checker automatically
-uses the local daily and event snapshots unless explicit paths override them.
-
-The daily file includes an authoritative Expiry column, which is now used for
-binding each row. Its latest date is 2026-10-16 with current expiry 2026-10-19.
-That expiry is missing from the stale local master. The separate dailyNW CSV
-ends 2026-09-28 and is retained for inspection, not treated as current.
-The loaded master currently exposes 2026-10-27 and 2026-11-23 in the horizon;
-matching full per-expiry reference rows remain unavailable. The daily CSV's
-additional NW columns are preserved without silently substituting a different
-model's inputs. The actual event calendar now loads, removing that blocker.
-New-model LUTs remain absent at their configured path.
-
-The original daily CSV can therefore be used without GS_DAILY_EXPIRY when it
-has its own authoritative Expiry column; explicit binding remains supported
-for a CSV lacking that column. Farther expiries still need their own inputs.
+See [Gamma operation/API](../../GAMMA_WEEKLY_SIMULATOR.md) for inputs, all 30
+lanes, full calculations, missing-reference behavior, freshness and rollback.
+Windows Git is installed and VS Code git.path is configured. Public source
+and offline runtime/history have separate manifests and upload receipts.

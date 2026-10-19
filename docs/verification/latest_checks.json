@@ -1,0 +1,36 @@
+{
+  "checked_at": "2026-10-19T14:20:05.853050+05:30",
+  "checks": [
+    {
+      "name": "shell_syntax",
+      "exit_code": 0,
+      "summary": ""
+    },
+    {
+      "name": "python_operations_and_gamma",
+      "exit_code": 0,
+      "summary": "_launcher.LauncherTest.test_start_and_ctrl_c_stop_only_owned_children) ... ok\ntest_live_wal_snapshot_and_private_separation (test_system_operations.BackupTests.test_live_wal_snapshot_and_private_separation) ... ok\ntest_validate_and_install_with_explicit_identifier_exclusion (test_system_operations.MasterRefreshTests.test_validate_and_install_with_explicit_identifier_exclusion) ... ok\ntest_python_elsewhere_is_not_project_owned (test_system_operations.RestartTests.test_python_elsewhere_is_not_project_owned) ... ok\ntest_unknown_listener_aborts_before_any_stop_and_verified_stop_works (test_system_operations.RestartTests.test_unknown_listener_aborts_before_any_stop_and_verified_stop_works) ... ok\n\n----------------------------------------------------------------------\nRan 20 tests in 6.712s\n\nOK\n"
+    },
+    {
+      "name": "ke2_feed",
+      "exit_code": 0,
+      "summary": "scription_is_atomic (test_ke2_feed.FeedTests.test_invalid_subscription_is_atomic) ... ok\ntest_pending_future_and_exchange_isolation (test_ke2_feed.FeedTests.test_pending_future_and_exchange_isolation) ... ok\ntest_raw_ltp_and_missing_fields (test_ke2_feed.FeedTests.test_raw_ltp_and_missing_fields) ... ok\ntest_stock_contracts_quotes_and_segment_validation (test_ke2_feed.FeedTests.test_stock_contracts_quotes_and_segment_validation) ... ok\ntest_strike_recenter_and_extra_strikes (test_ke2_feed.FeedTests.test_strike_recenter_and_extra_strikes) ... ok\ntest_websocket_snapshot_unsubscribe_resume_and_unsupported (test_ke2_feed.FeedTests.test_websocket_snapshot_unsubscribe_resume_and_unsupported) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.084s\n\nOK\n"
+    },
+    {
+      "name": "fastapi",
+      "exit_code": 0,
+      "summary": "ilities_and_master (test_ke2_api.APITests.test_docs_health_capabilities_and_master) ... ok\ntest_invalid_requests_preserve_upstream_error (test_ke2_api.APITests.test_invalid_requests_preserve_upstream_error) ... ok\ntest_response_timeout_closes_session (test_ke2_api.APITests.test_response_timeout_closes_session) ... ok\ntest_stock_snapshot_quotes_events_and_unsupported (test_ke2_api.APITests.test_stock_snapshot_quotes_events_and_unsupported) ... ok\ntest_unreachable_upstream_is_not_healthy_feed (test_ke2_api.APITests.test_unreachable_upstream_is_not_healthy_feed) ... ok\ntest_unsubscribe_reconnect_and_session_isolation (test_ke2_api.APITests.test_unsubscribe_reconnect_and_session_isolation) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.264s\n\nOK\n"
+    },
+    {
+      "name": "native_packet_bounds",
+      "exit_code": 0,
+      "summary": "Test project /home/administrator/projects/nse-fo-low-latency-decoder/build-ke2\n    Start 1: bse_feed\n1/1 Test #1: bse_feed .........................   Passed    0.00 sec\n\n100% tests passed, 0 tests failed out of 1\n\nTotal Test time (real) =   0.00 sec\n"
+    },
+    {
+      "name": "cpp_websocket_to_ke2_stock_and_sensex",
+      "exit_code": 0,
+      "summary": "test_bse_packet_to_ke2_and_legacy (test_ke2_transport.TransportTests.test_bse_packet_to_ke2_and_legacy) ... ok\ntest_stock_packet_to_ke2_and_legacy (test_ke2_transport.TransportTests.test_stock_packet_to_ke2_and_legacy) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 22.164s\n\nOK\n"
+    }
+  ],
+  "live_exchange_certification": false
+}

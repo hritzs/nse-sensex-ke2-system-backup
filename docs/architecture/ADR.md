@@ -1,6 +1,6 @@
 # Architecture decision record
 
-Baseline: 16 October 2026. Decisions describe the current implementation,
+Updated: 19 October 2026. Decisions describe the current implementation,
 not authorization to deploy/restart services.
 
 ## ADR-001: preserve legacy consumer messages
@@ -47,7 +47,7 @@ Cost: current BSE xx.Token identity still needs live verification.
 Keep its NSE F&O/CM listeners, local reference map, HTTP dashboard and port
 8100 separate from KE2. Include its code, data and binary in backup.
 Cost: duplicate feed parsing exists, and an enhanced-layout disagreement
-between this server and the main decoder is an unresolved validation item.
+was resolved against NNF 9.48 with transaction-specific parser fixtures.
 
 ## ADR-008: FIFO dequeue instead of cross-instrument deletion
 
@@ -100,3 +100,24 @@ Add --restart to the single-terminal launcher, including indicative and
 optional API. Validate all selected listener identities before signaling.
 Unknown listeners fail closed. Strict Gamma input readiness precedes stop.
 Cost: deployment cannot proceed until real reference files are supplied.
+
+
+## ADR-014: full fixed calculations without daily signal references
+
+The user explicitly chose to run full hedge/exit/PnL calculations and record
+REFERENCE_UNAVAILABLE for later expiries without daily references. Market
+inputs and the event calendar still drive actual calculations. Missing event
+sizing information blocks; missing LUT/veto references are not fabricated.
+
+## ADR-015: explicit LAN feed and public source publication
+
+--lan exposes KE2 9002 on all interfaces; local-only remains the default.
+The user explicitly selected public GitHub publication. Credentials, licenses,
+runtime databases, binaries and original Git history stay in offline archives.
+New source snapshots append to public main without force-pushing history.
+
+## ADR-016: canonical NSE wire formats
+
+NNF 9.48 defines 214-byte legacy and 258-byte enhanced MBP records, and zero
+compression length means uncompressed. Both are implemented and regression
+tested. Queue drops and decoder rejections have separate named counters.

@@ -17,12 +17,12 @@ class GammaTests(unittest.TestCase):
     def setUpClass(cls):
         cls.engine = load_engine()
 
-    def frame(self, day="2026-10-16", expiry="2026-10-20", seconds=346):
+    def frame(self, day="2026-10-16", expiry="2026-10-20", seconds=346, moving=False):
         e = self.engine
         times = e.pd.date_range(day + " 09:15:00", periods=seconds, freq="1s")
         rows = []
-        for stamp in times:
-            u = 25000.0
+        for index, stamp in enumerate(times):
+            u = 25000.0 + (60.0 * __import__("math").sin(index/50.0) if moving else 0.0)
             for k in (24950.0, 25000.0, 25050.0):
                 for side in ("CE", "PE"):
                     price = e._bs_price_kernel(side == "CE", u, k, 2.5 / 365, 0, .2)
@@ -216,6 +216,43 @@ class GammaTests(unittest.TestCase):
                     store.bind_model("edited-same-day", "2026-10-19")
             finally:
                 store.db.close()
+
+    def test_each_second_is_one_consistent_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store=Store(Path(temp)/"snap.db")
+            try:
+                row={"Time_dt":"2026-10-16 09:16:00","Strike":25000,"Type":"CE"}
+                store.append("2026-10-16","2026-10-20",[row])
+                moved=dict(row,Strike=25050)
+                store.append("2026-10-16","2026-10-20",[moved])
+                frame=store.frame(self.engine,"2026-10-16","2026-10-20")
+                self.assertEqual(frame.Strike.tolist(),[25050])
+            finally:
+                store.db.close()
+
+    def test_moving_market_reference_fallback_keeps_hedging_and_event_costs(self):
+        e=self.engine
+        frame=self.frame(seconds=901,moving=True)
+        events={e.pd.Timestamp("2026-10-16").date()}
+        complete=self.refs(events=events)
+        baseline=evaluate(e,complete,frame,"2026-10-16","2026-10-20")
+        missing=self.refs(events=events);missing.inputs={}
+        fallback=evaluate(e,missing,frame,"2026-10-16","2026-10-20")
+        for lane in LANES[:-1]:
+            a,b=baseline["lanes"][lane],fallback["lanes"][lane]
+            self.assertEqual(b["signal"],"REFERENCE_UNAVAILABLE")
+            self.assertEqual(b["size"],1/3)
+            self.assertGreater(b["hedge_notional"],0)
+            for field in ("gross_pnl","net_pnl","entry_cost","hedge_cost","hedge_notional","strike","sl_bps","tp_bps"):
+                self.assertAlmostEqual(a[field],b[field],places=8,msg=lane+" "+field)
+
+    def test_incomplete_daily_values_use_full_market_calculations(self):
+        references=self.refs()
+        references.inputs["2026-10-16","2026-10-20"]["prev_future"]=float("nan")
+        result=evaluate(self.engine,references,self.frame(),"2026-10-16","2026-10-20")
+        self.assertFalse(result["daily_reference_available"])
+        self.assertEqual(result["lanes"]["0916"]["signal"],"REFERENCE_UNAVAILABLE")
+        self.assertTrue(self.engine.np.isfinite(result["lanes"]["0916"]["net_pnl"]))
 
 
 if __name__ == "__main__":

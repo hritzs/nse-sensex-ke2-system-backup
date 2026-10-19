@@ -1,6 +1,6 @@
 # System architecture baseline
 
-Version/date: 16 October 2026. Exact files are identified by the source
+Version/date: 19 October 2026. Exact files are identified by the source
 manifest in the corresponding system backup.
 
 - [HLD.md](HLD.md): system context, responsibilities, data flows, deployment,
@@ -25,3 +25,8 @@ They do not claim full original KE2 spec compliance or live-wire certification.
 
 The Gamma extension and explicit project restart are documented in the final
 sections of HLD/LLD and [Gamma operation/API](../../GAMMA_WEEKLY_SIMULATOR.md).
+
+Current startup: bash start_system.sh --restart --gamma-weekly --with-api --lan.
+Master refresh and exact model LUTs are established; daily reference absence
+is an explicit diagnostic for full fixed-trade calculations. See the Gamma
+runbook and publication receipts for current operational/publication evidence.

@@ -99,5 +99,28 @@ while True:time.sleep(.1)
         self.assertFalse(restart.belongs(info, root))
 
 
+
+class MasterRefreshTests(unittest.TestCase):
+    def test_validate_and_install_with_explicit_identifier_exclusion(self):
+        from datetime import datetime,timedelta
+        from zoneinfo import ZoneInfo
+        import csv
+        from scripts.refresh_master import install
+        today=datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/"shared").mkdir()
+            old=root/"shared/GreekTokens.csv";old.write_text("old master")
+            source=root/"incoming.csv"
+            with source.open("w",newline="") as f:
+                writer=csv.writer(f);writer.writerow(["Token","Symbol","Expiry","Strike","OpType","Exchange"])
+                for i in range(1000):
+                    writer.writerow([10000+i,"NIFTY",(today+timedelta(days=3 if i%2 else 10)).strftime("%d-%b-%y"),25000+i,"CE","NSE"])
+                writer.writerow(["1e+05","PAGEIND",(today+timedelta(days=3)).strftime("%d-%b-%y"),44000,"PE","NSE"])
+            result=install(source,root=root)
+            self.assertEqual(result["instruments"],1000)
+            self.assertEqual(result["excluded_rows"][0]["token"],"1e+05")
+            self.assertEqual(old.read_bytes(),source.read_bytes())
+            self.assertEqual((Path(result["previous_master_backup"])/"GreekTokens.csv").read_text(),"old master")
+
 if __name__ == "__main__":
     unittest.main()

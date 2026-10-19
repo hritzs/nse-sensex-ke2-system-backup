@@ -13,6 +13,7 @@ CHECK_ONLY=0
 REUSE_EXISTING=0
 RESTART=0
 REFRESH_INPUTS=0
+KE2_BIND_HOST="${KE2_HOST:-127.0.0.1}"
 SIMULATOR_SCRIPT="simulation_server_2.py"
 declare -A EXISTING_PORTS=()
 PIDS=()
@@ -21,7 +22,7 @@ LOG_FILES=()
 
 usage() {
     cat <<'HELP'
-Usage: bash start_system.sh [--check] [--reuse-existing] [--no-simulator] [--no-indicative] [--with-api] [--restart] [--gamma-weekly] [--refresh-inputs]
+Usage: bash start_system.sh [--check] [--reuse-existing] [--no-simulator] [--no-indicative] [--with-api] [--restart] [--gamma-weekly] [--refresh-inputs] [--lan]
 
 Default: start decoder :9001, KE2 adapter :9002, NIFTY simulator :8000,
 and indicative-close :8100 if that independent service is not already running.
@@ -29,6 +30,7 @@ Separate logs are printed on startup. Stay in this terminal; Ctrl+C stops only
 processes launched here. Existing services on 9001/9002/simulator port cause
 startup to stop, with no replacement or automatic restart.
 
+--lan             Bind the KE2 WebSocket feed on all interfaces for LAN clients.
 --refresh-inputs  Verify/copy current master, daily inputs, calendar and exact LUTs from the configured Windows share before startup.
 --restart         Stop identified project listeners first, then start services.
                   Unknown listeners abort before any signal is sent.
@@ -40,7 +42,7 @@ startup to stop, with no replacement or automatic restart.
 --no-simulator    Run the feed without starting the NIFTY simulator.
 --no-indicative   Do not start the independent indicative-close service.
 Environment: KE2_PYTHON, BSE_LOCAL_IP, MINUTE_SIM_DB, MINUTE_HTTP_HOST,
-MINUTE_HTTP_PORT, KE2_API_PYTHON, KE2_TEST_UPSTREAM. Existing simulator database configuration is preserved.
+MINUTE_HTTP_PORT, KE2_HOST, KE2_API_PYTHON, KE2_TEST_UPSTREAM. Existing simulator database configuration is preserved.
 HELP
 }
 
@@ -52,6 +54,7 @@ for arg in "$@"; do
         --check) CHECK_ONLY=1 ;;
         --restart) RESTART=1 ;;
         --refresh-inputs) REFRESH_INPUTS=1 ;;
+        --lan) KE2_BIND_HOST="0.0.0.0" ;;
         --gamma-weekly) SIMULATOR_SCRIPT="gamma_weekly_server.py" ;;
         --reuse-existing) REUSE_EXISTING=1 ;;
         --no-simulator) WITH_SIMULATOR=0 ;;
@@ -77,7 +80,7 @@ if (( REFRESH_INPUTS )); then
     (( CHECK_ONLY )) && fail "--check does not refresh files; run --refresh-inputs deliberately."
     command -v powershell.exe >/dev/null || fail "Windows PowerShell required for share refresh."
     REFRESH_SCRIPT=$(wslpath -w "$PROJECT_ROOT/scripts/refresh_market_inputs.ps1")
-    powershell.exe -NoProfile -NonInteractive -File "$REFRESH_SCRIPT" || fail "Input refresh failed; services left running."
+    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$REFRESH_SCRIPT" || fail "Input refresh failed; services left running."
     "$PYTHON_BIN" scripts/refresh_master.py --source data/reference_import/GreekTokens.csv || fail "Master validation failed; services left running."
 fi
 "$PYTHON_BIN" -c 'import websockets; from websockets.asyncio.server import serve' ||
@@ -90,7 +93,7 @@ if (( WITH_SIMULATOR )); then
     if [[ "$SIMULATOR_SCRIPT" == gamma_weekly_server.py ]]; then
         "$PYTHON_BIN" -c 'import numpy,pandas; from gamma_weekly_engine import load_engine; load_engine()' || fail "Gamma dependencies or backtest source unavailable."
         if (( RESTART )); then
-            "$PYTHON_BIN" scripts/check_gamma_inputs.py --strict || fail "Gamma expiry references/calendar missing; existing services left running."
+            "$PYTHON_BIN" scripts/check_gamma_inputs.py --strict || fail "Gamma event calendar or eligible contracts unavailable; existing services left running."
         fi
     fi
     [[ "$SIM_PORT" != 9001 && "$SIM_PORT" != 9002 && "$SIM_PORT" != 8100 ]] ||
@@ -231,7 +234,7 @@ start_service() {
 }
 
 start_service decoder 9001 "$PROJECT_ROOT/build-ke2/nse_decoder"
-start_service ke2-adapter 9002 "$PYTHON_BIN" -u "$PROJECT_ROOT/ke2_feed_server.py" --host 127.0.0.1 --port 9002
+start_service ke2-adapter 9002 "$PYTHON_BIN" -u "$PROJECT_ROOT/ke2_feed_server.py" --host "$KE2_BIND_HOST" --port 9002
 if (( WITH_SIMULATOR )); then
     export NIFTY_WS_URI=ws://127.0.0.1:9001
     export MINUTE_HTTP_HOST="${MINUTE_HTTP_HOST:-127.0.0.1}"
@@ -246,7 +249,8 @@ if (( WITH_API )); then
     start_service api-tester 9003 "$API_PYTHON" -m uvicorn ke2_test_api:app --host 127.0.0.1 --port 9003 --workers 1
 fi
 
-printf '\nKE2 API: ws://127.0.0.1:9002/\n'
+printf '\nKE2 API: ws://127.0.0.1:9002/ (bind %s)\n' "$KE2_BIND_HOST"
+if [[ "$KE2_BIND_HOST" == 0.0.0.0 ]]; then printf 'LAN clients: ws://<server-LAN-IP>:9002/\n'; fi
 if (( WITH_SIMULATOR )); then printf 'Simulator: http://127.0.0.1:%s/\n' "$SIM_PORT"; fi
 if (( WITH_API )); then printf 'FastAPI Swagger: http://127.0.0.1:9003/docs\n'; fi
 printf 'TCP readiness confirmed; verify actual prices with scripts/ke2_probe.py.\n'

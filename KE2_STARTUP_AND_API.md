@@ -1,76 +1,79 @@
 # Start and use the NSE + SENSEX feed system
 
-Run Linux commands below in an Ubuntu WSL terminal. Working directory:
+Updated 19 October 2026. Run commands in Ubuntu WSL from:
 
 ```bash
 cd /home/administrator/projects/nse-fo-low-latency-decoder
 ```
 
-Use the single-command launcher below or the individual terminal commands.
-Service state changes: recheck ports before use. At the latest launcher
-preflight all four application ports were occupied; no live service was
-started, stopped, or restarted while preparing or testing this launcher.
-
-## One-command startup
-
-From an Ubuntu WSL terminal:
+## One-command stack, including LAN access
 
 ```bash
-cd /home/administrator/projects/nse-fo-low-latency-decoder
-bash start_system.sh --reuse-existing
+bash start_system.sh --restart --gamma-weekly --with-api --lan
 ```
 
-This starts missing services in the background from one terminal:
+This starts the corrected C++ decoder (9001), KE2 feed (9002), new Gamma
+simulator (8000), indicative-close (8100) and FastAPI tester (9003).
+Restart stops only positively identified project listeners, including
+indicative. Unknown listeners abort before signals. Keep this terminal open;
+Ctrl+C stops its new child processes. Logs are printed at startup.
 
-- new C++ decoder on 9001;
-- KE2 adapter on 9002;
-- existing NIFTY simulator on 8000;
-- independent indicative-close service on 8100, if it is not already running.
+The other LAN system connects to `ws://<server-LAN-IP>:9002/`.
+The observed Windows/WSL server address is `172.16.9.119` on 19 October 2026,
+so its current endpoint is `ws://172.16.9.119:9002/`.
+It must send JSON subscriptions from [the developer API](KE2_DEVELOPER_API.md).
+Use the server's current address after any network/address change.
 
-It does not open additional terminal windows. Separate logs go under
-`logs/system-<IST-date-and-time>-<launcher-pid>/`; actual paths are printed.
-Keep this terminal open. Ctrl+C stops only processes this launcher started.
-Services reused from existing terminals are not stopped. If every requested
-service already exists, the launcher reports that and exits without taking
-ownership of them.
+`--lan` binds the feed on 0.0.0.0; without it the feed is localhost-only.
+`KE2_HOST` selects a particular bind address. The simulator and FastAPI tester
+remain localhost. Windows firewall/WSL routing must permit TCP 9002 from the
+client; test from that other Windows system with:
 
-Use --reuse-existing only when the listeners are your intended services.
-It checks port occupancy, not the identity or protocol version of an existing
-listener. In particular, an old decoder on 9001 still lacks /ke2-source;
-reuse does not upgrade it.
+```powershell
+Test-NetConnection 172.16.9.119 -Port 9002
+```
 
-For a strict cold start that refuses occupied core ports:
+For a minimal two-terminal feed without simulator/UI, run the decoder first,
+then `./venv/bin/python -u ke2_feed_server.py --host 0.0.0.0 --port 9002`.
+
+## Refresh current input files before startup
 
 ```bash
-bash start_system.sh
+bash start_system.sh --refresh-inputs --restart --gamma-weekly --with-api --lan
 ```
 
-Check without starting anything:
+The explicit refresh copies and hashes the current NSE master, daily CSV,
+event calendar and exact LUTs from the configured Windows share, then
+validates/installs the master with a rollback copy. PowerShell's policy
+override applies only to that invocation. No persistent policy is changed.
+Use KE2_INPUT_SHARE to override the share root.
+
+Read-only configuration/port checks:
 
 ```bash
-bash start_system.sh --check --reuse-existing
+./venv/bin/python scripts/check_gamma_inputs.py --strict
+bash start_system.sh --check --restart --gamma-weekly --with-api --lan
 ```
 
-Run only the decoder and KE2 adapter:
+The new simulator uses six actual near-term NIFTY expiry dates and five lanes
+per date: 0916, 0917, 0918, 0919 and NOW. All hedge/exit/PnL calculations use
+the supplied backtest functions. Fixed entries record filters without using
+them to block entry. Missing daily verdict references record
+REFERENCE_UNAVAILABLE; missing event sizing information blocks calculation.
+
+Read [Gamma timings and final HTTP API](GAMMA_WEEKLY_SIMULATOR.md) before use.
+Its database is data/gamma_weekly_simulation.db. The original simulator and
+minute_simulation.db remain available as the rollback selection:
 
 ```bash
-bash start_system.sh --reuse-existing --no-simulator --no-indicative
+bash start_system.sh --restart --with-api --lan
 ```
 
-BSE_LOCAL_IP and existing MINUTE_SIM_DB configuration are preserved. The
-simulator also respects MINUTE_HTTP_HOST and MINUTE_HTTP_PORT. The adapter
-stays on localhost:9002. The launcher requires the existing built binaries
-and Python environment; it does not build, download data, or migrate a DB.
-If startup or a managed child fails, it stops its own remaining children.
-The independent service on an occupied 8100 is always left untouched.
+`--reuse-existing` deliberately keeps existing processes and cannot upgrade
+them. It is mutually exclusive with `--restart`. No auto-boot daemon is added.
 
-Startup verifies listening ports, not fresh market data. Use the API probes
-later in this runbook to check actual quotes. Launcher lifecycle validation
-uses temporary stand-in services on unused ports:
-
-```bash
-./venv/bin/python -m unittest discover -s tests -p test_launcher.py -v
-```
+The following sections document component commands and KE2 message examples.
+The legacy simulator command in section 6 is for the retained original UI.
 
 ## 1. What runs where
 
@@ -80,7 +83,7 @@ uses temporary stand-in services on unused ports:
 | Raw decoder source | ws://127.0.0.1:9001/ke2-source | Internal input to KE2 adapter |
 | KE2 adapter | ws://127.0.0.1:9002/ | New market-data JSON API |
 | FastAPI tester | http://127.0.0.1:9003/docs | Optional Swagger/HTTP test client |
-| Existing NIFTY simulator | http://127.0.0.1:8000/ | Existing UI and simulation backend |
+| Selected NIFTY simulator | http://127.0.0.1:8000/ | Gamma with --gamma-weekly; retained legacy otherwise |
 | Indicative-close service | http://127.0.0.1:8100/ | Separate existing dashboard |
 
 ```text
@@ -116,14 +119,15 @@ dependencies; CMake reports a missing dependency if the machine lacks one.
 The multicast network must deliver BOTH configured streams to this machine.
 A successful WebSocket connection alone does not prove exchange data is flowing.
 
-- NSE master: `shared/GreekTokens.csv`. The inspected copy is from 8 September
-  and lacks the intermediate October NIFTY weekly contracts. Code cannot
-  generate missing exchange tokens.
+- NSE master: `shared/GreekTokens.csv`, imported from the authoritative
+  share-root export. Current near-term NIFTY coverage includes 19/27 October
+  and 3/9/17/23 November 2026. Refresh/provenance validation does not invent
+  missing exchange tokens. One PAGEIND scientific-notation ID is excluded.
 - BSE master: `shared/BSEIndexTokens.csv`. It includes the 29 October 2026
   SENSEX future, ID 864571. Blank `OpType` on `Type=FUTURE` is supported.
 - Both decoder and adapter load their masters at startup, not continuously.
   Any authorized master update must reach both processes before their next
-  authorized start. No automatic downloader or network-share refresh is added.
+  authorized start. Use the explicit --refresh-inputs operation described above.
 - Current BSE wire-token matching still requires live verification.
 - Actual LTP, bid, ask, and decoded NSE OI are supplied. Unsupported fields
   are null or omitted; no external data or substitute prices are invented.
@@ -201,7 +205,7 @@ Optional explicit configuration:
 
 There is no HTTP REST endpoint on 9002. Send JSON over a WebSocket connection.
 
-## 6. Start the EXISTING NIFTY simulator if needed (terminal C)
+## 6. Start the retained LEGACY NIFTY simulator if needed (terminal C)
 
 This is independent of the KE2 adapter. If port 8000 already has your simulator
 or a container, keep that instance; do not start a duplicate or change databases.
@@ -543,16 +547,15 @@ restart selected, verified project services with:
 bash start_system.sh --restart --with-api
 ```
 
-For the new five-lanes-per-expiry Gamma simulator, first supply the actual
-new-model inputs and inspect readiness, then use:
+For the new five-lanes-per-expiry Gamma simulator, inspect the loaded model/input readiness, then use:
 
 ```bash
 ./venv/bin/python scripts/check_gamma_inputs.py
 bash start_system.sh --restart --gamma-weekly --with-api
 ```
 
-Gamma restart refuses to stop existing services when required reference/event
-inputs are absent. Unknown listeners are never killed. The original simulator
+Gamma restart refuses to stop existing services when the event calendar or
+eligible contracts are unavailable. Missing daily signal references are diagnostic. Unknown listeners are never killed. The original simulator
 selection remains available, and the new simulator uses its own database.
 
 Read [GAMMA_WEEKLY_SIMULATOR.md](GAMMA_WEEKLY_SIMULATOR.md) for required files,

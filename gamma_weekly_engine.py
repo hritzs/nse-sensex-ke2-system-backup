@@ -21,6 +21,17 @@ def lut_signal(tables, stage, coordinate):
     return "LUT_ON" if table[coordinate] else "LUT_OFF"
 
 
+
+def usable_daily_input(value):
+    if not isinstance(value, dict):
+        return False
+    fields = ("prev_straddle", "adj_iv_chg", "yesterday_iv", "prev_future", "prev_pure", "prev_with_prev")
+    try:
+        return all(math.isfinite(float(value[k])) and
+                   (k == "adj_iv_chg" or float(value[k]) > 0) for k in fields)
+    except (KeyError, TypeError, ValueError):
+        return False
+
 def load_engine(path=ROOT / "GammaShort_Backtest_Final.py"):
     source = path.read_text()
     tree = ast.parse(source, filename=str(path))
@@ -131,6 +142,7 @@ class ReferenceData:
                 self.errors.append("REFERENCE_UNAVAILABLE: " + str(exc))
         else:
             self.errors.append("REFERENCE_UNAVAILABLE: set GS_EXPIRY_INPUTS, or GS_DAILY_CSV with authoritative Expiry")
+        self.inputs = {key: value for key, value in self.inputs.items() if usable_daily_input(value)}
         event_path = environ.get("GS_EVENT_PATH")
         try:
             if not event_path:
@@ -149,7 +161,11 @@ class ReferenceData:
             self.errors.append("EVENT_CALENDAR_UNAVAILABLE: " + str(exc))
         adapter_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in (ROOT / "gamma_weekly_engine.py", ROOT / "gamma_weekly_server.py")}
-        fingerprint = repr((engine.source_sha256, sorted(self.files.items()), sorted(adapter_hashes.items())))
+        bindings = sorted((day, expiry, tuple(sorted(value.items())))
+                          for (day, expiry), value in self.inputs.items())
+        grid_config = (engine.GRID_END_EARLY, engine.GRID_END_LATE, str(engine.GRID_END_SWITCH))
+        fingerprint = repr((engine.source_sha256, sorted(self.files.items()),
+                            sorted(adapter_hashes.items()), bindings, grid_config))
         self.fingerprint = hashlib.sha256(fingerprint.encode()).hexdigest()
 
     def blockers(self, day, expiry):
@@ -178,7 +194,7 @@ def evaluate(engine, references, frame, day, expiry, now_hhmm=None):
                        events=references.events)
     original_loader, original_sim = engine.load_cw_ticks, engine.simulate_cw
     original_worker = engine.process_day
-    missing_daily = (day, expiry) not in references.inputs
+    missing_daily = not usable_daily_input(references.inputs.get((day, expiry)))
     captured = {}
     def simulate(grid, entry_idx, cache, dte_idx, build_iv):
         result = original_sim(grid, entry_idx, cache, dte_idx, build_iv)

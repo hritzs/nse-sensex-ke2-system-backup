@@ -1,3 +1,30 @@
+# NSE + SENSEX decoder, KE2 feed and Gamma simulator
+
+Current startup and API documentation:
+[Startup/LAN](KE2_STARTUP_AND_API.md), [Gamma full strategy and HTTP API](GAMMA_WEEKLY_SIMULATOR.md),
+[KE2 client contract](KE2_DEVELOPER_API.md), [FastAPI tester](KE2_FASTAPI_TESTER.md),
+[HLD/LLD](docs/architecture/README.md), [Backup/restore](docs/backup/BACKUP_RESTORE.md).
+
+From Ubuntu WSL:
+
+```bash
+bash start_system.sh --restart --gamma-weekly --with-api --lan
+```
+
+Feed clients use ws://SERVER_LAN_IP:9002/. The Gamma UI is localhost:8000,
+indicative localhost:8100, and Swagger localhost:9003/docs. Optional
+--refresh-inputs verifies/copies the authoritative master, daily references,
+event calendar and exact model LUTs before starting.
+
+Six near-term NIFTY expiries each have independent 0916/0917/0918/0919/NOW
+lanes using the supplied full numerical model. Missing daily signal
+references are diagnostic; prices and historical trades are never invented.
+Original simulator/database and legacy decoder messages remain available.
+
+The public source repository excludes credentials, licenses, runtime databases
+and original Git history. See model/feed capability limits in the linked docs.
+
+---
 # NIFTY Minute Straddle — Clean Rewrite
 
 This is a clean replacement for the legacy `simulation_server.py` architecture.

@@ -1,0 +1,73 @@
+{
+  "service": "gamma_weekly_simulator",
+  "trade_date": "2026-10-19",
+  "source_connected": true,
+  "expiries": [
+    "2026-10-19",
+    "2026-10-27",
+    "2026-11-03",
+    "2026-11-09",
+    "2026-11-17",
+    "2026-11-23"
+  ],
+  "feed_freshness": {
+    "2026-10-19": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.014,
+      "last_quote_received": "2026-10-19T14:33:00.998772+05:30"
+    },
+    "2026-10-27": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.035,
+      "last_quote_received": "2026-10-19T14:33:00.977096+05:30"
+    },
+    "2026-11-03": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.01,
+      "last_quote_received": "2026-10-19T14:33:01.002773+05:30"
+    },
+    "2026-11-09": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.04,
+      "last_quote_received": "2026-10-19T14:33:00.972894+05:30"
+    },
+    "2026-11-17": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.036,
+      "last_quote_received": "2026-10-19T14:33:00.976322+05:30"
+    },
+    "2026-11-23": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.039,
+      "last_quote_received": "2026-10-19T14:33:00.973835+05:30"
+    }
+  },
+  "daily_reference_availability": {
+    "2026-10-19": true,
+    "2026-10-27": false,
+    "2026-11-03": false,
+    "2026-11-09": false,
+    "2026-11-17": false,
+    "2026-11-23": false
+  },
+  "lut_available": true,
+  "event_calendar_available": true,
+  "errors": [],
+  "last_error": null,
+  "model_sha256": "b699ff897305ccffe9003701512a75dc8130cbe680d40a7ddf431fae576693eb",
+  "reference_fingerprint": "774a90cdbea20f94d87b2a30ae8a657595b2cc944a5e7af6c3222fa40f01fb76",
+  "checked_at": "2026-10-19T14:33:01.013082+05:30",
+  "launcher_pid": 40012,
+  "logs": "logs/system-20261019-142538-40012",
+  "ke2_bind": "0.0.0.0:9002",
+  "lan_url": "ws://172.16.9.119:9002/",
+  "live_probes": {
+    "NIFTY": "passed",
+    "SENSEX": "passed",
+    "RELIANCE_FO": "passed"
+  },
+  "physical_lan_client_test": "not_performed",
+  "windows_localhost_tcp": "passed",
+  "windows_self_lan_ip_tcp": "timeout",
+  "exchange_wide_certification": false
+}

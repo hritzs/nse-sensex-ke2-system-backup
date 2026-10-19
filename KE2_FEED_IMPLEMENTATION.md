@@ -19,9 +19,10 @@ KE2 v1 compliance.
   replaces a hard-coded address that is not present on this machine.
 - The indicative-close service on port 8100 is unchanged.
 
-No existing live process was restarted. Changes are in source and the separate
-`build-ke2/` directory. The current running binary does not yet expose the
-new source route.
+The corrected build is in build-ke2/. Use the startup runbook to select it
+and the new /ke2-source route. Explicit --restart replaces identified project
+services; --lan exposes KE2 9002 to LAN clients. The Gamma simulator is a
+separate consumer, documented in GAMMA_WEEKLY_SIMULATOR.md.
 
 ## Supported data
 
@@ -178,3 +179,23 @@ Full startup and response examples: [KE2_STARTUP_AND_API.md](KE2_STARTUP_AND_API
 
 Developer integration contract: [KE2_DEVELOPER_API.md](KE2_DEVELOPER_API.md).
 Complete JSON examples: [KE2_API_EXAMPLES.json](KE2_API_EXAMPLES.json).
+
+
+## Completed contract/layout corrections (19 October 2026)
+
+The current authoritative NSE share export is installed through checksum and
+coverage validation with a prior-master backup. It contains the near-term
+weekly ladder. See shared/NSE_MASTER_PROVENANCE.json and scripts/refresh_master.py.
+The upstream exporter remains external; its data is imported, never inferred.
+
+Main 7208/17208 parsing now follows NSE NNF 9.48: 214/258-byte records with
+separate LTP and MBP offsets. Mixed compressed/raw sequential messages are
+supported; CompressionLen=0 is valid. Safe LZO bounds and truncated-batch tests
+guard publication. Queue-overflow drops and decoder rejections have separate
+atomic counters; health reports are serialized. This fixes the identified
+layout/framing defects without claiming complete live exchange certification.
+
+The user-approved Gamma fixed comparisons use the full numerical backtest
+functions and separate state/database. Missing daily references record an
+unavailable verdict while calculations continue; event-calendar absence blocks.
+KE2 market-data capabilities above remain unchanged.

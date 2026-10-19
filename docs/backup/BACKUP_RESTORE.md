@@ -24,7 +24,7 @@ walk and original Git working tree. Artifacts have local private permissions.
 | MANIFEST.json | Every captured source/runtime path, size, SHA-256, dependencies and cloud preparation status |
 | SHA256SUMS | Archive and manifest hashes |
 | VERIFIED.txt | Archive/SQLite verification completed |
-| github-source/ | Isolated sanitized Git repository prepared for the new private remote |
+| github-source/ | Isolated sanitized Git repository prepared for the selected backup remote |
 
 SQLite files are read with the SQLite backup API and quick_check, including
 committed WAL contents. Raw WAL/SHM files are omitted. This is a per-database
@@ -61,7 +61,7 @@ The implementation session also creates a verified Windows copy under
 Use the actual path reported in the session; this document alone does not
 prove a copy or upload occurred.
 
-## New private GitHub backup
+## GitHub backup
 
 Requested repository: `hritzs/nse-sensex-ke2-system-backup`.
 The original `hritzs/nse-fo-low-latency-decoder` remote is untouched.
@@ -73,9 +73,9 @@ python3 scripts/publish_system_backup.py backups/system/ACTUAL_BACKUP_DIRECTORY
 Creation needs authenticated GitHub API access as hritzs: a locally configured
 `gh auth login` session or `GH_TOKEN`/`GITHUB_TOKEN` environment variable.
 Never paste tokens into source files or chat. Existing SSH authentication
-can push after a private repository exists, but cannot create it.
+can push after the repository exists, but cannot create it.
 
-The helper checks the account and private visibility before pushing, pushes
+The helper checks the account and requested visibility before pushing, pushes
 the prepared snapshot without force, verifies the remote commit and visibility
 again, and writes `GITHUB_UPLOAD_RECEIPT.json` plus its hash. A matching receipt
 is evidence of completed upload. MANIFEST's original preparation status is
@@ -125,8 +125,8 @@ alone does not contain those uncommitted changes. For GitHub recovery use
    under the approved project restart procedure.
 6. Verify actual fresh exchange quotes; successful sockets are insufficient.
 
-The Gamma simulator uses its own DB. Changing model/reference hashes requires
-a new GS_SIM_DB. The original simulator and database remain a rollback path.
+The Gamma simulator uses its own DB. Changing model/reference hashes within
+the same trade date requires a new GS_SIM_DB; new-day input updates are allowed. The original simulator and database remain a rollback path.
 No automatic restore, service replacement or destructive cleanup is performed
 by the backup script.
 
@@ -146,3 +146,12 @@ tests and documentation. Live databases, credentials, licenses, runtime files,
 compiled binaries and original Git history remain only in offline archives.
 This publishes a source snapshot; it does not activate pending simulator or
 decoder changes. Deployment/status notes from earlier steps are historical.
+
+## Subsequent snapshots and deployed status
+
+The public backup already exists at https://github.com/hritzs/nse-sensex-ke2-system-backup.
+Subsequent prepared snapshots fetch its current main as their parent and publish
+with a normal fast-forward push. No force push or original-repository mutation
+is used. A concurrent remote update causes the push to fail for review.
+See ../verification/DEPLOYMENT.md for the measured deployment status; publishing
+a source snapshot and starting services are separate actions.

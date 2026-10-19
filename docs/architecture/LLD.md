@@ -1,6 +1,6 @@
 # Low-level design: implemented system
 
-Baseline: 16 October 2026. This document is tied to the hashes in the versioned
+Updated: 19 October 2026. This document is tied to the hashes in the versioned
 backup manifest. It complements HLD.md and the client API documentation; it
 does not redefine or change strategy behavior.
 
@@ -108,31 +108,29 @@ SIGINT sets the running flag false and notifies workers. Listener receive
 timeouts allow shutdown checks. Main joins both listeners and worker threads.
 The launcher signals owned decoder processes with SIGINT for this path.
 
-### 3.2 NSE framing currently in the main decoder
+### 3.2 NSE framing and MBP (NNF 9.48)
 
-process_packet uses NSE outer count, per-chunk compressed length and
-lzo1z decompression. It skips an 8-byte prefix in the decoded chunk, then
-reads the transaction code at message offset +10.
+The main and indicative parsers use transaction-specific layouts. The official
+March 2026 tables specify 7208: record 214, LTP +12, bid +60, ask +120;
+17208: record 258, LTP +16, bid +68, ask +148. MBP is five bid levels then
+five ask levels, with 12-byte legacy or 16-byte enhanced entries. Prices are
+divided by 100. Batch count is at header +40; record start is +42. Both records
+are validated before any batch publication; truncated batches publish nothing.
 
-Dispatch includes:
-- 7208 / 17208: current parse_7208.
-- 7202 / 17202, 7201 / 17201, 7130 / 17130: existing OI paths.
-- 7220: existing price-protection limits.
-- Unknown codes: no inferred decoder.
+NSE sequential packing accepts mixed compressed and uncompressed messages.
+CompressionLen=0 is a valid raw message, not a drop. Eight prefix bytes precede
+the 40-byte BCAST header; raw length comes from MessageLength at header +38.
+Compressed messages use bounded lzo1z_decompress_safe output.
 
-Current parse_7208 assumes a 40-byte header, 2-byte record count and
-214-byte records for both MBP transaction codes. It bounds/clamps the record
-count, accepts book types 1/2 and resolves the market token.
+Decoder counters are atomic. DECODE STATS separates datagrams, parsed messages,
+rejected units, uncompressed messages, LZO errors and framing errors. Parsed
+messages can exceed datagrams because one datagram contains multiple messages.
+Queue-overflow drops are a separate ingress metric. A shared report mutex
+serializes health/log blocks and protects the once-per-second report state.
+Tests cover both layouts with two records, mixed raw/LZO framing and every
+truncated fixture prefix. Exchange-wide lossless delivery is not asserted.
 
-Its current raw price offsets relative to record are:
-- token +0 (32-bit big endian)
-- book +4 (16-bit)
-- LTP +16 /100
-- MBP base +56; best bid price +60 /100; best ask +120 /100
-
-These describe the implementation, not a certified NSE layout. The indicative
-service has a conflicting enhanced-layout implementation (section 8); R02
-must be resolved against protocol/captures before live correctness is claimed.
+Primary protocol: https://nsearchives.nseindia.com/web/mediaattachment/2026-03/TP_FO_Trimmed_NNF_PROTOCOL_9.48_20260313174413.pdf
 
 ### 3.3 BSE NFCAST
 
@@ -549,33 +547,35 @@ The local cursor is not an exchange sequence or durable event log.
 
 ## 10. Launcher LLD
 
-Arguments: --check, --reuse-existing, --no-simulator, --no-indicative,
---with-api. Feed Python and optional API Python environments are distinct.
-Simulator DB/host/port and BSE interface configuration are retained.
+Flags: --check, --restart, --reuse-existing, --gamma-weekly, --with-api,
+--no-simulator, --no-indicative, --refresh-inputs and --lan.
+The original simulator remains the rollback/default selection; the completed
+stack explicitly selects --gamma-weekly. KE2_HOST defaults to 127.0.0.1;
+--lan binds 0.0.0.0:9002. The API tester and simulator remain localhost.
 
-Preflight verifies required files/dependencies and all required ports before
-starting any child. Strict mode rejects occupied core ports; reuse mode leaves
-them unmanaged and cannot certify their identity/version. Occupied 8100 is
-always left alone. --check starts no service.
+Explicit input refresh verifies source/destination SHA-256 and source stat
+stability for each file, then validates and atomically installs the NSE export.
+Prior master and provenance are retained. No token is inferred. PowerShell's
+process-only policy override does not alter persistent Windows settings.
 
-A flock descriptor prevents competing owned launchers. Child processes close
-the inherited lock descriptor. Each owned child enters a separate session,
-resets background SIGINT, then execs the selected binary/interpreter.
-PIDs/names/log paths are kept in parallel arrays.
+Dependency/master/calendar and selected-port checks precede any stop. Restart
+resolves ss PIDs and validates /proc exe, cwd, argv and starttime for all
+targets. Rebuilt executables marked (deleted) retain their verified project
+identity. Unknown listeners abort the entire stop plan. Signals use bounded
+INT/TERM/KILL and recheck identity. Indicative 8100 is included in explicit
+restart; reuse leaves existing processes unmanaged.
 
-Readiness means TCP listening, not fresh exchange quotes. Failure to listen,
-early exit or later managed-child failure triggers cleanup of owned children.
-Ctrl+C signals owned children with SIGINT, then bounded TERM/KILL fallback
-for remaining owned PIDs. Existing services are never included in that list.
-
-Logs: logs/system-<IST-time>-<launcher-pid>/<service>.log.
-All-existing reuse exits without claiming ownership. No auto-boot daemon
-or service manager is installed by this launcher.
+Separate flock descriptors protect restart and owned launcher operations;
+children close both before exec. Readiness means TCP listening. Startup or
+managed-child failure cleans up owned children. Ctrl+C has the same bounded
+cleanup. Logs are logs/system-<IST-time>-<pid>/<service>.log.
+No auto-boot daemon is installed.
 
 ## 11. Backup and restore implementation contract
 
-Source snapshot is versioned and manifest-hashed. GitHub payload uses a fresh,
-sanitized initial history, with Git LFS for large market CSVs. It excludes local
+Source snapshots are versioned and manifest-hashed. The first GitHub payload
+has sanitized initial history; later publications retain the remote main
+commit as parent and push without force. Git LFS stores large market CSVs. It excludes local
 credentials/license, DBs, logs, environments, build products and original
 historical Git objects.
 
@@ -635,11 +635,12 @@ The original file is not modified.
 ReferenceData loads exactly five CW tables via the author's row-count/Trade
 loader. Tables remain None on failure; no false-filled substitute is supplied.
 Expiry-specific normalized CSV records are validated finite/positive and unique
-per (Date,Expiry). The original daily loader is also available only with a
-separate explicit expiry binding. Event XLSX first column or Date-header CSV
+per (Date,Expiry). The original daily loader binds each row through its own Expiry column;
+GS_DAILY_EXPIRY can explicitly bind a CSV lacking that column. Event XLSX first column or Date-header CSV
 must be supplied; missing events do not silently become a non-event calendar.
 Hashes cover the author source, both adapter files and every loaded input.
-Changed fingerprints reject reuse of a different-model database.
+Changed fingerprints reject same-day model/reference edits; different trade
+dates may bind new reference versions in the same database.
 
 ### Observation and lane sequence
 
@@ -725,7 +726,8 @@ broker state, hedge orders or cash transactions are submitted externally.
 GET / serves the new self-contained UI. GET /api/state, /api/health and
 /api/runs return full state, errors, model/reference hashes and basis metadata.
 GET /api/expiries returns eligible dates and classification. POST /api/now
-requires a listed expiry, valid session time and available reference/calendar.
+requires a listed expiry, valid session time and a loaded event calendar.
+Missing daily signal references permit full trade maths with an unavailable verdict.
 It returns the saved next-minute entry HHMM; later calls retain the first
 request. Bodies are limited to 4096 bytes. Unsupported paths return 404.
 This opt-in API differs from the retained original simulator's API.
@@ -733,7 +735,7 @@ This opt-in API differs from the retained original simulator's API.
 The launcher defaults to the original simulator. --gamma-weekly changes only
 the simulator process selection and its separate DB. --restart is mutually
 exclusive with --reuse-existing. Before signals, binary/dependency checks and
-strict Gamma reference readiness run. Selected occupied ports are resolved
+Gamma event-calendar/expiry readiness runs. Selected occupied ports are resolved
 using ss PIDs, /proc/cmdline, cwd, exe and process starttime. Exact project
 binaries and whitelisted script paths, or project uvicorn ke2_test_api:app,
 are required. All candidates are validated before any stop. Signals progress
@@ -743,35 +745,35 @@ remain in place; no global kill is used.
 
 ### Extension validation and deployment limits
 
-Eight Gamma tests cover false/missing LUTs, fixed filter bypass, event entry
+Gamma tests cover false/missing LUTs, fixed filter bypass, event entry
 timing/size/costs, per-expiry references, near-expiry discovery, NOW/model-version
 persistence, no backward fill and two-expiry capture->SQLite->model->HTTP.
 Operation tests cover committed live-WAL capture and no signals when any
 listener is unknown. Existing launcher fixture tests cover child cleanup.
 
-Missing actual new LUT/daily/event files and stale instrument masters still
-prevent a complete live strategy run. Decoder packet-layout and BSE identity
-risks documented earlier remain open. Fixture success is not live exchange
-certification. The exact GitHub/offline outcome is recorded by backup manifests
-and an upload receipt, not inferred from a documentation claim.
+The exact CW LUTs and event calendar are loaded; refreshed near-term master
+coverage contains six expiry datasets. Daily references remain optional
+diagnostics for fixed comparisons as explicitly selected. BSE/exchange-wide
+conformance and historical trade-tick/DTE equivalence are not claimed.
+Publication outcomes are verified by upload receipts and offline manifests.
 
-## Reference snapshots found during Windows-share verification
 
-The exact daily CSV and event calendar from the configured Windows share were
-reachable and copied into data/gamma_inputs with file hashes in PROVENANCE.json.
-These remain private offline runtime data. The simulator/checker automatically
-uses the local daily and event snapshots unless explicit paths override them.
+### Final model/API details
 
-The daily file includes an authoritative Expiry column, which is now used for
-binding each row. Its latest date is 2026-10-16 with current expiry 2026-10-19.
-That expiry is missing from the stale local master. The separate dailyNW CSV
-ends 2026-09-28 and is retained for inspection, not treated as current.
-The loaded master currently exposes 2026-10-27 and 2026-11-23 in the horizon;
-matching full per-expiry reference rows remain unavailable. The daily CSV's
-additional NW columns are preserved without silently substituting a different
-model's inputs. The actual event calendar now loads, removing that blocker.
-New-model LUTs remain absent at their configured path.
+market_fixed_worker constructs the same observed-second grid and invokes the
+author's simulate_cw when daily signal references are absent. No placeholder
+straddle/IDV/gap values are supplied; signal is REFERENCE_UNAVAILABLE.
+Moving-price tests compare hedge notional, exits, event scaling and all PnL
+components with the reference-backed path.
 
-The original daily CSV can therefore be used without GS_DAILY_EXPIRY when it
-has its own authoritative Expiry column; explicit binding remains supported
-for a CSV lacking that column. Farther expiries still need their own inputs.
+Store.append deletes and rewrites the complete row set for a resampled second
+within one transaction. This prevents stale rows from an earlier ATM window
+from giving that second inconsistent underlying/book values.
+All five lanes are initialized immediately for every expiry.
+
+settings keys are model:YYYY-MM-DD. The API exposes feed_freshness,
+daily_reference_availability, lut_available and event_calendar_available.
+Freshness measures the last accepted quote per expiry; it is not an assertion
+that every held contract has traded. Existing model/quote basis metadata and
+provisional-fill semantics remain explicit. See GAMMA_WEEKLY_SIMULATOR.md
+for final state fields and operating commands.

@@ -140,13 +140,26 @@ def prepare_git(source,output,source_entries,repo_name,visibility="private"):
          "note":"Backup preparation appends LFS rules to .gitattributes after these baseline hashes."},indent=2)+"\n")
     run(["git","init","-b","main",str(target)])
     run(["git","-C",str(target),"lfs","install","--local"])
+    remote="git@github.com:"+repo_name+".git"
+    existing=subprocess.run(["git","ls-remote",remote,"refs/heads/main"],
+                            capture_output=True,text=True,timeout=30)
+    parent=None
+    if existing.returncode==0 and existing.stdout.strip():
+        run(["git","-C",str(target),"remote","add","origin",remote])
+        run(["git","-C",str(target),"fetch","--no-tags","origin","main"])
+        parent=run(["git","-C",str(target),"rev-parse","FETCH_HEAD"])
+        # This is a new isolated staging repository with an empty index.
+        # Setting its initial branch parent preserves published history.
+        run(["git","-C",str(target),"update-ref","refs/heads/main",parent])
+    elif existing.returncode and "Repository not found" not in existing.stderr:
+        raise RuntimeError("Cannot verify the publication parent; offline archives are retained. Retry GitHub preparation when reachable.")
     run(["git","-C",str(target),"add","--all","--force"])
     run(["git","-C",str(target),"commit","-m","System architecture and source backup"])
     commit=run(["git","-C",str(target),"rev-parse","HEAD"])
     # No remote is created or pushed here. Private repository verification is mandatory.
     return {"status":"prepared_not_uploaded","requested_repository":repo_name,
             "required_visibility":visibility,"directory":"github-source",
-            "branch":"main","commit":commit,"lfs_paths":large}
+            "branch":"main","commit":commit,"parent_commit":parent,"lfs_paths":large}
 
 def create(root,prepare,repo_name,visibility="private"):
     root=root.resolve()

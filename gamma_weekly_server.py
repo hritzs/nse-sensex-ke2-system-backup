@@ -84,6 +84,10 @@ class Store:
 
     def append(self, day, expiry, rows):
         with self.lock, self.db:
+            # A resample within the same second replaces the complete row set.
+            # Otherwise a moved ATM window could leave rows with an old U/book.
+            self.db.executemany("DELETE FROM observations WHERE day=? AND expiry=? AND second=?",
+                [(day, expiry, second) for second in {r["Time_dt"] for r in rows}])
             self.db.executemany("INSERT OR REPLACE INTO observations VALUES(?,?,?,?,?,?)",
                 [(day, expiry, r["Time_dt"], r["Strike"], r["Type"], json.dumps(r)) for r in rows])
 
@@ -129,6 +133,7 @@ class Simulator:
         self.results = {}
         self.last_sample = {}
         self.last_evaluation = None
+        self.last_quote_received = {}
         self.connected = False
         self.connection_epoch = 0
         self.error = None
@@ -145,9 +150,21 @@ class Simulator:
         self.store.bind_model(self.references.fingerprint,day)
         self.day = day
         self.expiries = eligible_expiries(self.master, stamp.date(), self.horizon, self.explicit)
-        self.results = {e: {"status": "RESTORED", "lanes": self.store.restored(day, e, self.references.fingerprint)} for e in self.expiries}
+        with self.lock:
+            self.results = {}
+            for expiry in self.expiries:
+                restored = self.store.restored(day, expiry, self.references.fingerprint)
+                blocked = self.references.blockers(day, expiry)
+                initial = {lane: {"status": "WAITING_INPUTS" if blocked else
+                    ("READY" if lane == "NOW" else "WAITING_QUOTES"), "signal": None,
+                    "scheduled_hhmm": None if lane == "NOW" else lane,
+                    "blockers": blocked} for lane in LANES}
+                initial.update(restored)
+                self.results[expiry] = {"status": "RESTORED" if restored else
+                    ("WAITING_INPUTS" if blocked else "WAITING_QUOTES"), "lanes": initial}
         self.quotes.clear()
         self.last_sample.clear()
+        self.last_quote_received.clear()
 
     def ingest(self, event, received=None):
         if event.get("type") != "market_quote" or event.get("exchange") != "NSE":
@@ -164,6 +181,7 @@ class Simulator:
         self.refresh_day(now)
         if instrument.expiry not in self.expiries:
             return
+        self.last_quote_received[instrument.expiry] = now.timestamp()
         self.quotes[instrument.expiry, instrument.strike, instrument.option_type] = {
             "ltp": values[0], "bid": values[1], "ask": values[2], "stamp": now.timestamp()}
 
@@ -238,12 +256,27 @@ class Simulator:
         self.last_evaluation = datetime.now(IST).isoformat()
 
     def state(self):
+        stamp = datetime.now(IST).timestamp()
         with self.lock:
+            freshness = {}
+            for expiry in self.expiries:
+                received = self.last_quote_received.get(expiry)
+                age = max(0., stamp-received) if received is not None else None
+                freshness[expiry] = {
+                    "status": "WAITING_QUOTES" if age is None else
+                              ("FRESH" if self.connected and age <= 10 else "STALE"),
+                    "quote_age_seconds": None if age is None else round(age,3),
+                    "last_quote_received": None if received is None else
+                                           datetime.fromtimestamp(received,IST).isoformat()}
             return clean(dict(
                 service="gamma_weekly_simulator", trade_date=self.day,
                 source_connected=self.connected, source=self.source,
                 expiries=self.expiries, results=self.results, errors=self.references.errors,
                 last_error=self.error, last_evaluation=self.last_evaluation,
+                feed_freshness=freshness,
+                daily_reference_availability={e: (self.day,e) in self.references.inputs for e in self.expiries},
+                lut_available=all(table is not None for table in self.references.tables),
+                event_calendar_available=self.references.events is not None,
                 model_sha256=self.engine.source_sha256,
                 reference_fingerprint=self.references.fingerprint,
                 expiry_classification="explicit_allowlist" if self.explicit else "listed_NIFTY_options_within_horizon",
@@ -305,7 +338,7 @@ small{color:#aac}</style><h1>GammaShort: independent expiry lanes</h1>
 const ex=document.querySelector('#expiry');
 async function refresh(){const s=await(await fetch('/api/state')).json();const selected=ex.value;
 ex.replaceChildren(...s.expiries.map(e=>new Option(e,e)));if(s.expiries.includes(selected))ex.value=selected;
-document.querySelector('#health').textContent=JSON.stringify({connected:s.source_connected,errors:s.errors,last_error:s.last_error,last_evaluation:s.last_evaluation},null,2);
+document.querySelector('#health').textContent=JSON.stringify({connected:s.source_connected,errors:s.errors,last_error:s.last_error,last_evaluation:s.last_evaluation,freshness:s.feed_freshness},null,2);
 const root=document.querySelector('#lanes');root.replaceChildren();
 for(const [id,lane] of Object.entries(s.results[ex.value]?.lanes||{})){
 const card=document.createElement('div');card.className='lane';const heading=document.createElement('h2');heading.textContent=id;
