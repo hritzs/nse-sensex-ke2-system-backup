@@ -1,0 +1,91 @@
+{
+  "checked_at": "2026-10-19T14:52:29.215511+05:30",
+  "command": "bash run_all.sh",
+  "launcher_pid": 43201,
+  "checks": {
+    "gamma": {
+      "url": "http://127.0.0.1:8000/api/health",
+      "status": 200,
+      "source_connected": true,
+      "expiries": [
+        "2026-10-19",
+        "2026-10-27",
+        "2026-11-03",
+        "2026-11-09",
+        "2026-11-17",
+        "2026-11-23"
+      ],
+      "lanes_per_expiry": {
+        "2026-10-19": 5,
+        "2026-10-27": 5,
+        "2026-11-03": 5,
+        "2026-11-09": 5,
+        "2026-11-17": 5,
+        "2026-11-23": 5
+      },
+      "feed_freshness": {
+        "2026-10-19": {
+          "status": "FRESH",
+          "quote_age_seconds": 0.02,
+          "last_quote_received": "2026-10-19T14:52:29.162871+05:30"
+        },
+        "2026-10-27": {
+          "status": "FRESH",
+          "quote_age_seconds": 0.005,
+          "last_quote_received": "2026-10-19T14:52:29.177820+05:30"
+        },
+        "2026-11-03": {
+          "status": "FRESH",
+          "quote_age_seconds": 0.021,
+          "last_quote_received": "2026-10-19T14:52:29.161169+05:30"
+        },
+        "2026-11-09": {
+          "status": "FRESH",
+          "quote_age_seconds": 0.021,
+          "last_quote_received": "2026-10-19T14:52:29.161786+05:30"
+        },
+        "2026-11-17": {
+          "status": "FRESH",
+          "quote_age_seconds": 0.021,
+          "last_quote_received": "2026-10-19T14:52:29.161823+05:30"
+        },
+        "2026-11-23": {
+          "status": "FRESH",
+          "quote_age_seconds": 0.008,
+          "last_quote_received": "2026-10-19T14:52:29.174981+05:30"
+        }
+      }
+    },
+    "gamma_ui": {
+      "url": "http://127.0.0.1:8000/",
+      "status": 200
+    },
+    "indicative": {
+      "url": "http://127.0.0.1:8100/health",
+      "status": 200
+    },
+    "indicative_data": {
+      "url": "http://127.0.0.1:8100/api/data",
+      "status": 200
+    },
+    "indicative_ui": {
+      "url": "http://127.0.0.1:8100/",
+      "status": 200
+    },
+    "fastapi": {
+      "url": "http://127.0.0.1:9003/health",
+      "status": 200
+    },
+    "swagger": {
+      "url": "http://127.0.0.1:9003/docs",
+      "status": 200
+    },
+    "openapi": {
+      "url": "http://127.0.0.1:9003/openapi.json",
+      "status": 200
+    }
+  },
+  "listeners": "State  Recv-Q Send-Q  Local Address:Port Peer Address:PortProcess                                    \nLISTEN 0      1000   10.255.255.254:53        0.0.0.0:*                                              \nLISTEN 0      4096       127.0.0.54:53        0.0.0.0:*                                              \nLISTEN 0      32            0.0.0.0:8100      0.0.0.0:*    users:((\"indicative_clos\",pid=43462,fd=3))\nLISTEN 0      5             0.0.0.0:8000      0.0.0.0:*    users:((\"python\",pid=43373,fd=7))         \nLISTEN 0      2048          0.0.0.0:9003      0.0.0.0:*    users:((\"python\",pid=43477,fd=6))         \nLISTEN 0      100           0.0.0.0:9002      0.0.0.0:*    users:((\"python\",pid=43328,fd=6))         \nLISTEN 0      512           0.0.0.0:9001      0.0.0.0:*    users:((\"nse_decoder\",pid=43282,fd=8))    \nLISTEN 0      4096    127.0.0.53%lo:53        0.0.0.0:*                                              \n",
+  "restart_lock_available": true,
+  "physical_lan_client_verified": false
+}

@@ -14,6 +14,8 @@ REUSE_EXISTING=0
 RESTART=0
 REFRESH_INPUTS=0
 KE2_BIND_HOST="${KE2_HOST:-127.0.0.1}"
+SIM_BIND_HOST="${MINUTE_HTTP_HOST:-127.0.0.1}"
+API_BIND_HOST="${KE2_API_HOST:-127.0.0.1}"
 SIMULATOR_SCRIPT="simulation_server_2.py"
 declare -A EXISTING_PORTS=()
 PIDS=()
@@ -22,7 +24,7 @@ LOG_FILES=()
 
 usage() {
     cat <<'HELP'
-Usage: bash start_system.sh [--check] [--reuse-existing] [--no-simulator] [--no-indicative] [--with-api] [--restart] [--gamma-weekly] [--refresh-inputs] [--lan]
+Usage: bash start_system.sh [--check] [--reuse-existing] [--no-simulator] [--no-indicative] [--with-api] [--restart] [--gamma-weekly] [--refresh-inputs] [--lan] [--lan-all]
 
 Default: start decoder :9001, KE2 adapter :9002, NIFTY simulator :8000,
 and indicative-close :8100 if that independent service is not already running.
@@ -31,6 +33,7 @@ processes launched here. Existing services on 9001/9002/simulator port cause
 startup to stop, with no replacement or automatic restart.
 
 --lan             Bind the KE2 WebSocket feed on all interfaces for LAN clients.
+--lan-all         Also bind the simulator and FastAPI tester on all interfaces.
 --refresh-inputs  Verify/copy current master, daily inputs, calendar and exact LUTs from the configured Windows share before startup.
 --restart         Stop identified project listeners first, then start services.
                   Unknown listeners abort before any signal is sent.
@@ -42,7 +45,7 @@ startup to stop, with no replacement or automatic restart.
 --no-simulator    Run the feed without starting the NIFTY simulator.
 --no-indicative   Do not start the independent indicative-close service.
 Environment: KE2_PYTHON, BSE_LOCAL_IP, MINUTE_SIM_DB, MINUTE_HTTP_HOST,
-MINUTE_HTTP_PORT, KE2_HOST, KE2_API_PYTHON, KE2_TEST_UPSTREAM. Existing simulator database configuration is preserved.
+MINUTE_HTTP_PORT, KE2_HOST, KE2_API_HOST, KE2_PUBLIC_HOST, KE2_API_PYTHON, KE2_TEST_UPSTREAM. Existing simulator database configuration is preserved.
 HELP
 }
 
@@ -55,6 +58,7 @@ for arg in "$@"; do
         --restart) RESTART=1 ;;
         --refresh-inputs) REFRESH_INPUTS=1 ;;
         --lan) KE2_BIND_HOST="0.0.0.0" ;;
+        --lan-all) KE2_BIND_HOST="0.0.0.0"; SIM_BIND_HOST="0.0.0.0"; API_BIND_HOST="0.0.0.0" ;;
         --gamma-weekly) SIMULATOR_SCRIPT="gamma_weekly_server.py" ;;
         --reuse-existing) REUSE_EXISTING=1 ;;
         --no-simulator) WITH_SIMULATOR=0 ;;
@@ -68,12 +72,13 @@ done
 (( RESTART && REUSE_EXISTING )) && fail "Choose --restart or --reuse-existing, not both."
 
 cd -- "$PROJECT_ROOT"
-for tool in ss grep flock; do
+for tool in ss grep flock tee; do
     command -v "$tool" >/dev/null || fail "Required command missing: $tool"
 done
 [[ -x "$PYTHON_BIN" ]] || fail "Python not executable: $PYTHON_BIN"
 [[ -x build-ke2/nse_decoder ]] || fail "Build first: cmake --build build-ke2 --target nse_decoder -j2"
 [[ -r ke2_feed_server.py ]] || fail "Missing ke2_feed_server.py"
+[[ -r scripts/system_endpoints.py ]] || fail "Missing scripts/system_endpoints.py"
 [[ -r shared/GreekTokens.csv && -r shared/BSEIndexTokens.csv ]] ||
     fail "Both local instrument masters are required."
 if (( REFRESH_INPUTS )); then
@@ -146,7 +151,11 @@ START_INDICATIVE=$WITH_INDICATIVE
 if (( WITH_INDICATIVE )); then
     if port_open 8100; then
         START_INDICATIVE=0
-        printf 'Port 8100 already occupied; leaving that service untouched.\n'
+        if (( RESTART && CHECK_ONLY )); then
+            printf 'Indicative listener on 8100 is included in the planned verified restart.\n'
+        else
+            printf 'Port 8100 already occupied; leaving that service untouched.\n'
+        fi
     else
         [[ -x indicative_close_server/indicative_close_server ]] ||
             fail "Missing indicative-close binary; build it or use --no-indicative."
@@ -237,7 +246,7 @@ start_service decoder 9001 "$PROJECT_ROOT/build-ke2/nse_decoder"
 start_service ke2-adapter 9002 "$PYTHON_BIN" -u "$PROJECT_ROOT/ke2_feed_server.py" --host "$KE2_BIND_HOST" --port 9002
 if (( WITH_SIMULATOR )); then
     export NIFTY_WS_URI=ws://127.0.0.1:9001
-    export MINUTE_HTTP_HOST="${MINUTE_HTTP_HOST:-127.0.0.1}"
+    export MINUTE_HTTP_HOST="$SIM_BIND_HOST"
     export MINUTE_HTTP_PORT="$SIM_PORT"
     start_service simulator "$SIM_PORT" "$PYTHON_BIN" -u "$PROJECT_ROOT/$SIMULATOR_SCRIPT"
 fi
@@ -246,13 +255,20 @@ if (( START_INDICATIVE )); then
 fi
 
 if (( WITH_API )); then
-    start_service api-tester 9003 "$API_PYTHON" -m uvicorn ke2_test_api:app --host 127.0.0.1 --port 9003 --workers 1
+    start_service api-tester 9003 "$API_PYTHON" -m uvicorn ke2_test_api:app --host "$API_BIND_HOST" --port 9003 --workers 1
 fi
 
-printf '\nKE2 API: ws://127.0.0.1:9002/ (bind %s)\n' "$KE2_BIND_HOST"
-if [[ "$KE2_BIND_HOST" == 0.0.0.0 ]]; then printf 'LAN clients: ws://<server-LAN-IP>:9002/\n'; fi
-if (( WITH_SIMULATOR )); then printf 'Simulator: http://127.0.0.1:%s/\n' "$SIM_PORT"; fi
-if (( WITH_API )); then printf 'FastAPI Swagger: http://127.0.0.1:9003/docs\n'; fi
+ENDPOINT_ARGS=(--sim-port "$SIM_PORT" --ke2-host "$KE2_BIND_HOST" --sim-host "$SIM_BIND_HOST" --api-host "$API_BIND_HOST" --simulator "$SIMULATOR_SCRIPT")
+if (( ! WITH_SIMULATOR )); then ENDPOINT_ARGS+=(--no-simulator); fi
+if (( ! WITH_INDICATIVE )); then ENDPOINT_ARGS+=(--no-indicative); fi
+if (( ! WITH_API )); then ENDPOINT_ARGS+=(--no-api); fi
+"$PYTHON_BIN" scripts/system_endpoints.py "${ENDPOINT_ARGS[@]}" | tee "$RUN_LOG_DIR/endpoints.txt"
+# Restart serialization covers stop/start only. Keeping fd 8 locked throughout
+# the monitor loop prevents a future authorized launcher from replacing us.
+if (( RESTART )); then
+    flock -u 8
+    exec 8>&-
+fi
 printf 'TCP readiness confirmed; verify actual prices with scripts/ke2_probe.py.\n'
 printf 'Logs: %s\nCtrl+C stops only services started here.\n' "$RUN_LOG_DIR"
 

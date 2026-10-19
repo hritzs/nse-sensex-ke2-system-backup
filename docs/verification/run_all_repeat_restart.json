@@ -1,0 +1,40 @@
+{
+  "checked_at": "2026-10-19T14:58:04.072602+05:30",
+  "launcher_pid": 43961,
+  "log": "logs/run-all-repeat-20261019-092748.log",
+  "status": "passed",
+  "health_checked_at": "2026-10-19T15:00:04.568849+05:30",
+  "source_connected": true,
+  "feed_freshness": {
+    "2026-10-19": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.003,
+      "last_quote_received": "2026-10-19T15:00:04.574360+05:30"
+    },
+    "2026-10-27": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.011,
+      "last_quote_received": "2026-10-19T15:00:04.567171+05:30"
+    },
+    "2026-11-03": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.014,
+      "last_quote_received": "2026-10-19T15:00:04.563854+05:30"
+    },
+    "2026-11-09": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.017,
+      "last_quote_received": "2026-10-19T15:00:04.560616+05:30"
+    },
+    "2026-11-17": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.017,
+      "last_quote_received": "2026-10-19T15:00:04.560571+05:30"
+    },
+    "2026-11-23": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.014,
+      "last_quote_received": "2026-10-19T15:00:04.563899+05:30"
+    }
+  }
+}

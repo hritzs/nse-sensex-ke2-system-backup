@@ -1,4 +1,5 @@
 import os
+import fcntl
 from pathlib import Path
 import signal
 import re
@@ -19,7 +20,11 @@ class LauncherTest(unittest.TestCase):
     def test_optional_fastapi_launch_and_cleanup(self):
         self.exercise(True)
 
-    def exercise(self, with_api):
+    @unittest.skipUnless((ROOT/".venv-ke2-api/bin/python").exists(), "API environment not installed")
+    def test_run_all_includes_indicative_gamma_and_lan_api(self):
+        self.exercise(True, all_services=True)
+
+    def exercise(self, with_api, all_services=False):
         # Exercise the actual launcher with stand-in processes on temporary ports.
         # Never start a real decoder, adapter, simulator, or production DB.
         with tempfile.TemporaryDirectory() as temp:
@@ -32,6 +37,10 @@ class LauncherTest(unittest.TestCase):
             for old,new in zip((9001,9002,8000,8100,9003),ports):
                 text=text.replace(str(old),str(new))
             (root/"start_system.sh").write_text(text)
+            (root/"scripts").mkdir()
+            for name in ("system_endpoints.py", "restart_project_services.py"):
+                (root/"scripts"/name).write_text((ROOT/"scripts"/name).read_text())
+            (root/"run_all.sh").write_text((ROOT/"run_all.sh").read_text())
             (root/"build-ke2").mkdir()
             (root/"shared").mkdir()
             for name in ("GreekTokens.csv","BSEIndexTokens.csv"):
@@ -41,7 +50,7 @@ import os,signal,socket,sys,time
 from pathlib import Path
 port=PORT_NUMBER
 if "--port" in sys.argv: port=int(sys.argv[sys.argv.index("--port")+1])
-if "simulation_server" in sys.argv[0]: port=int(os.environ["MINUTE_HTTP_PORT"])
+if "simulation_server" in sys.argv[0] or "gamma_weekly_server" in sys.argv[0]: port=int(os.environ["MINUTE_HTTP_PORT"])
 signal.signal(signal.SIGINT,lambda *_:sys.exit(0))
 sock=socket.socket();sock.bind(("127.0.0.1",port));sock.listen()
 Path(sys.argv[0]+".pid").write_text(str(os.getpid()))
@@ -51,6 +60,17 @@ while True:time.sleep(.05)
                 file=root/name
                 file.write_text(stub.replace("PORT_NUMBER",str(ports[0])))
                 file.chmod(0o755)
+            if all_services:
+                file=root/"gamma_weekly_server.py"
+                file.write_text(stub.replace("PORT_NUMBER",str(ports[2])))
+                (root/"gamma_weekly_engine.py").write_text("def load_engine(): return None\n")
+                (root/"scripts/check_gamma_inputs.py").write_text("pass\n")
+                (root/"indicative_close_server").mkdir()
+                file=root/"indicative_close_server/indicative_close_server"
+                file.write_text(stub.replace("PORT_NUMBER",str(ports[3])))
+                file.chmod(0o755)
+                (root/"shared/cm_bhavcopy").mkdir()
+                (root/"shared/cm_bhavcopy/current.csv").write_text("fixture\n")
             for sock in sockets:sock.close()
             env=dict(os.environ,KE2_PYTHON=str(ROOT/"venv/bin/python"),MINUTE_HTTP_PORT=str(ports[2]),
                      KE2_API_PYTHON=str(ROOT/".venv-ke2-api/bin/python"),
@@ -62,8 +82,8 @@ while True:time.sleep(.05)
             owned=[]
             try:
                 with output.open("w") as stream:
-                    args=["bash","start_system.sh","--no-indicative"]
-                    if with_api:args.append("--with-api")
+                    args=["bash","run_all.sh"] if all_services else ["bash","start_system.sh","--no-indicative"]
+                    if with_api and not all_services:args.append("--with-api")
                     process=subprocess.Popen(args,
                         cwd=root,env=env,stdout=stream,stderr=subprocess.STDOUT)
                     deadline=time.monotonic()+10
@@ -73,7 +93,22 @@ while True:time.sleep(.05)
                         time.sleep(.05)
                     else:self.fail(output.read_text())
                     owned=[int(pid) for pid in re.findall(r"PID=(\d+)",output.read_text())]
-                    self.assertEqual(len(owned),4 if with_api else 3)
+                    self.assertEqual(len(owned),5 if all_services else 4 if with_api else 3)
+                    if all_services:
+                        printed=output.read_text()
+                        self.assertIn("Indicative dashboard:",printed)
+                        self.assertIn("gamma_weekly_server.py",printed)
+                        self.assertIn("/api/now",printed)
+                        self.assertIn("/sessions/{session_id}/stream",printed)
+                        self.assertTrue((root/"indicative_close_server/indicative_close_server.pid").exists())
+                        with socket.socket() as external:
+                            external.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                            with self.assertRaises(OSError):external.bind(("127.0.0.2",ports[4]))
+                        self.assertTrue(list((root/"logs").glob("system-*/endpoints.txt")))
+                        # A running stack must allow the next verified restart.
+                        with (root/"logs/system-restart.lock").open("a") as lock:
+                            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                            fcntl.flock(lock,fcntl.LOCK_UN)
                     if with_api:
                         with urllib.request.urlopen(f"http://127.0.0.1:{ports[4]}/docs",timeout=2) as response:
                             self.assertEqual(response.status,200)

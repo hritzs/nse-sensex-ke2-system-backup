@@ -352,3 +352,17 @@ See [Gamma operation/API](../../GAMMA_WEEKLY_SIMULATOR.md) for inputs, all 30
 lanes, full calculations, missing-reference behavior, freshness and rollback.
 Windows Git is installed and VS Code git.path is configured. Public source
 and offline runtime/history have separate manifests and upload receipts.
+
+## Complete stack entry command
+
+Run bash run_all.sh from the project root in WSL. This selects verified
+restart, Gamma weekly simulator, indicative-close, KE2, C++ decoder and
+FastAPI tester with LAN bindings (--lan-all). Legacy start_system.sh
+selection flags remain supported, including the feed-only --lan mode.
+The restart lock covers service replacement/startup and is released before
+the monitor loop, allowing another invocation to replace the stack.
+The separate launcher lock protects ownership until cleanup completes.
+Local and LAN service URLs and HTTP route lists are printed and saved in
+logs/system-<timestamp>-<pid>/endpoints.txt. KE2_PUBLIC_HOST overrides the
+address printed by automatic detection. See KE2_STARTUP_AND_API.md and
+docs/verification/run_all_repeat_restart.json.

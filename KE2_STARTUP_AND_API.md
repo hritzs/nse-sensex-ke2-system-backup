@@ -6,6 +6,43 @@ Updated 19 October 2026. Run commands in Ubuntu WSL from:
 cd /home/administrator/projects/nse-fo-low-latency-decoder
 ```
 
+## Start everything with one script
+
+~~~bash
+cd /home/administrator/projects/nse-fo-low-latency-decoder
+bash run_all.sh
+~~~
+
+This is the complete default stack: decoder, KE2, Gamma weekly simulator,
+indicative dashboard and FastAPI tester. It restarts only verified project
+services. It enables LAN binding for KE2, the simulator and FastAPI; indicative
+already binds on all interfaces. It prints all service URLs and supported
+HTTP routes and saves them to logs/system-<timestamp>-<pid>/endpoints.txt.
+Keep the terminal open; Ctrl+C stops the services started by that launcher.
+
+~~~bash
+bash run_all.sh --check           # read-only; no restart
+bash run_all.sh --refresh-inputs  # refresh approved input sources, then restart
+~~~
+
+Current LAN entry points (recheck the server IP if it changes):
+
+| Service | LAN URL |
+| --- | --- |
+| KE2 WebSocket feed | ws://172.16.9.119:9002/ |
+| Gamma simulator | http://172.16.9.119:8000/ |
+| Indicative dashboard | http://172.16.9.119:8100/ |
+| FastAPI Swagger | http://172.16.9.119:9003/docs |
+
+Use KE2_PUBLIC_HOST to override the LAN address printed by automatic detection.
+Swagger documents all tester request bodies and responses. The simulator GET
+routes are /api/health, /api/state, /api/expiries and /api/runs; POST /api/now
+schedules the selected expiry's simulation lane. The indicative GET routes
+are /, /health and /api/data. Feed messages are documented in
+[KE2_DEVELOPER_API.md](KE2_DEVELOPER_API.md).
+On the other LAN computer test ports 9002, 8000, 8100 and 9003 as needed.
+Binding on all interfaces does not establish that remote routing works.
+
 ## One-command stack, including LAN access
 
 ```bash
@@ -26,7 +63,7 @@ Use the server's current address after any network/address change.
 
 `--lan` binds the feed on 0.0.0.0; without it the feed is localhost-only.
 `KE2_HOST` selects a particular bind address. The simulator and FastAPI tester
-remain localhost. Windows firewall/WSL routing must permit TCP 9002 from the
+remain localhost with --lan; --lan-all (used by run_all.sh) exposes those too. Windows firewall/WSL routing must permit TCP 9002 from the
 client; test from that other Windows system with:
 
 ```powershell

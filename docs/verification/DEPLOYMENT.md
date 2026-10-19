@@ -43,3 +43,22 @@ latest_deployment.json for measured health. Model and reference hashes are
 bound per trade date. Use a new GS_SIM_DB for same-day model/input changes.
 Rollback: restart with the legacy simulator selection, or follow the previous
 approved original-binary procedure; retain both simulator databases.
+
+## Complete launcher update
+
+The complete entry command is now bash run_all.sh. It selects --restart,
+--gamma-weekly, --with-api and --lan-all. All five services are included;
+simulator 8000 and FastAPI 9003 also bind on all interfaces in this mode.
+The older --lan flag retains its feed-only binding behavior.
+
+The new launcher was exercised with fixture services on isolated ports
+(three launcher tests passed), then deployed. A second live invocation
+successfully replaced the already-running stack, confirming the restart-lock
+fix. Restart serialization is released after startup; the monitoring loop
+retains only the separate ownership lock.
+
+All dashboard, health and indicative data routes responded with HTTP 200.
+The printed FastAPI route inventory matched the live OpenAPI schema.
+Each run saves its complete endpoint list in its log directory.
+See run_all_checks.json and run_all_repeat_restart.json for measured evidence.
+Physical LAN client access still needs verification from the other machine.

@@ -88,8 +88,8 @@
     },
     {
       "path": "KE2_STARTUP_AND_API.md",
-      "bytes": 21494,
-      "sha256": "a966c20f2137e21ec9791de8418cd6fd67209a8ed63b1225c52eb42d86bfc0ce"
+      "bytes": 23157,
+      "sha256": "17eb83ef28a2475caee8708adaecbf8a500abb8bd2e7c330e456bbcf01ce514d"
     },
     {
       "path": "KE2_WebSim_Feed_Spec(1).json",
@@ -103,8 +103,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 2660,
-      "sha256": "253e5e8eacce0e1f8e0a23bd103d29e438211f7c1d2ded01230809d4dffc0989"
+      "bytes": 2987,
+      "sha256": "66acd480d85e98899e8833f9c6f4faa81e2f76c6d12430b660b7ea42d46b88c4"
     },
     {
       "path": "TP_FO_Trimmed_NNF_PROTOCOL_9_46_20260107172010.pdf",
@@ -947,6 +947,11 @@
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "path": "run_all.sh",
+      "bytes": 592,
+      "sha256": "22877f363d0a1fe3220dd91a02219bd3f06a872989f4bca26e5320673800226b"
+    },
+    {
       "path": "server.js",
       "bytes": 2575,
       "sha256": "a9bb539a1eab960cfebdbb0f919600c2a244744ee6118be74eb764c01f23b364"
@@ -1298,8 +1303,8 @@
     },
     {
       "path": "start_system.sh",
-      "bytes": 11981,
-      "sha256": "da1e00511d6ed54f989f7f068f6761a9be7a3728513fe7b9e032402a9129865d"
+      "bytes": 12855,
+      "sha256": "5c46592b711793ea055035733ec6883f7649fe2ebf5820a64a68b1a1181c9828"
     },
     {
       "path": "stop.sh",
@@ -1582,6 +1587,21 @@
       "sha256": "80c239223eefb04ab2a5c6a2847d7f7534bebb829f1ff7497d9ec586c4cb854e"
     },
     {
+      "path": "backups/launcher_all_before_changes/20261019-091253/KE2_STARTUP_AND_API.md",
+      "bytes": 21494,
+      "sha256": "a966c20f2137e21ec9791de8418cd6fd67209a8ed63b1225c52eb42d86bfc0ce"
+    },
+    {
+      "path": "backups/launcher_all_before_changes/20261019-091253/start_system.sh",
+      "bytes": 11981,
+      "sha256": "da1e00511d6ed54f989f7f068f6761a9be7a3728513fe7b9e032402a9129865d"
+    },
+    {
+      "path": "backups/launcher_all_before_changes/20261019-091253/tests/test_launcher.py",
+      "bytes": 4356,
+      "sha256": "ae6b00ec92ccdc34962ddf5a90aa0ff8eb3d1cde14c6a0387a273621e2d0a114"
+    },
+    {
       "path": "backups/master_refresh/20261016-114018/GreekTokens.csv",
       "bytes": 115284474,
       "sha256": "5cb3c60857890312891fe2a2d61aa4bbe7fe9446015cfd88a719d21f7ab71e23"
@@ -1703,13 +1723,13 @@
     },
     {
       "path": "docs/architecture/HLD.md",
-      "bytes": 19671,
-      "sha256": "45542e6a020bf031a2a0388e7f2d617bf57f1c2e435f2e6fd4e57ef9698b14ca"
+      "bytes": 20468,
+      "sha256": "503eb0876c3e64b08f6374bd685181ef02c2b21dc441629ef2d1d29cb9156162"
     },
     {
       "path": "docs/architecture/LLD.md",
-      "bytes": 36907,
-      "sha256": "3e383988c9195a6af75d6c6245a6feb3b375ae010e3cc407c0ef445710f8e1bd"
+      "bytes": 37704,
+      "sha256": "030c4c9749a3ac8a0af1f58da46a6af9d4209557e5db876df0209e05d8729f23"
     },
     {
       "path": "docs/architecture/README.md",
@@ -1723,8 +1743,8 @@
     },
     {
       "path": "docs/verification/DEPLOYMENT.md",
-      "bytes": 2539,
-      "sha256": "81fc006af89b5ddefbcddb2fe418fc04ec2a4de5aeb7dac7306b19da7fd11a54"
+      "bytes": 3550,
+      "sha256": "f0567d91cffc18a258ca4442cfad2d76bbaa173fb5e5dfccc538092a6f65bf16"
     },
     {
       "path": "docs/verification/latest_checks.json",
@@ -1735,6 +1755,16 @@
       "path": "docs/verification/latest_deployment.json",
       "bytes": 2078,
       "sha256": "f7d3f0c92af84eec6c60279d8acce5719bdfe9832f9520db35529b81a9d97298"
+    },
+    {
+      "path": "docs/verification/run_all_checks.json",
+      "bytes": 3318,
+      "sha256": "6740eb428d96c6d2e273dd13d51641f57d120f347b74569f56161cc5cd8bd4f1"
+    },
+    {
+      "path": "docs/verification/run_all_repeat_restart.json",
+      "bytes": 1167,
+      "sha256": "e783c3aa78ca7d0a3a57a3f78e5ce440e08b1457cf939765780fb442f850a0dc"
     },
     {
       "path": "frontend/app.js",
@@ -2302,6 +2332,11 @@
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "path": "scripts/system_endpoints.py",
+      "bytes": 4564,
+      "sha256": "1f04288eb2c15c6bb913fda1d620b19085c1f7eca2ae39019b597fe11f06bcdf"
+    },
+    {
       "path": "shared/BSEIndexTokens.csv",
       "bytes": 7645603,
       "sha256": "2a32e9ce067bb12bbf453d6b37697f5a0c6fdd895e6b602446e5557e832e43da"
@@ -2633,8 +2668,8 @@
     },
     {
       "path": "tests/test_launcher.py",
-      "bytes": 4356,
-      "sha256": "ae6b00ec92ccdc34962ddf5a90aa0ff8eb3d1cde14c6a0387a273621e2d0a114"
+      "bytes": 6821,
+      "sha256": "c97298e424df154726e5de595747066c11ad973b0f0253c7a68f8974af7194d9"
     },
     {
       "path": "tests/test_system_operations.py",
