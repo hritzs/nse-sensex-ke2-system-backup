@@ -366,3 +366,12 @@ Local and LAN service URLs and HTTP route lists are printed and saved in
 logs/system-<timestamp>-<pid>/endpoints.txt. KE2_PUBLIC_HOST overrides the
 address printed by automatic detection. See KE2_STARTUP_AND_API.md and
 docs/verification/run_all_repeat_restart.json.
+
+## Token-master freshness update (28 October 2026)
+
+The complete launcher refreshes both authoritative NSE and BSE masters on
+every normal invocation before the coordinated service restart. The token-only
+refresh excludes model references and LUTs. --check is read-only and
+--no-refresh-masters permits deliberate offline startup. Consumers retain
+immutable startup maps until the coordinated restart; no runtime C++ map
+replacement is attempted. See docs/verification/EXPIRY_REFRESH_20261028.md.

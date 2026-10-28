@@ -122,5 +122,74 @@ class MasterRefreshTests(unittest.TestCase):
             self.assertEqual(old.read_bytes(),source.read_bytes())
             self.assertEqual((Path(result["previous_master_backup"])/"GreekTokens.csv").read_text(),"old master")
 
+class PairedMasterRefreshTests(unittest.TestCase):
+    def prepare(self, root):
+        import csv
+        from datetime import datetime,timedelta
+        from zoneinfo import ZoneInfo
+        (root/"shared").mkdir()
+        for name in ("GreekTokens.csv","BSEIndexTokens.csv"):
+            (root/"shared"/name).write_text("previous "+name)
+        today=datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        dates=[(today+timedelta(days=d)).strftime("%d-%b-%y") for d in (3,10)]
+        sources=[]
+        for name,exchange,count,base in [("nse.csv","NSE",1000,10000),
+                                         ("bse.csv","BSE",500,1000000)]:
+            path=root/name;sources.append(path)
+            with path.open("w",newline="") as stream:
+                writer=csv.writer(stream)
+                writer.writerow(["xx.Token","Exchange","Type","Symbol","Expiry","Strike","OpType","Token"])
+                for i in range(count):
+                    symbol="NIFTY" if exchange=="NSE" else "SENSEX"
+                    writer.writerow([base+i,exchange,"FUTURE" if i==0 else "OPTIDX",
+                                     symbol,dates[i%2],0 if i==0 else 25000+i,
+                                     "XX" if i==0 else "CE",base+i])
+        return sources
+
+    def test_pair_validation_failure_keeps_both_old_masters(self):
+        from scripts.refresh_master import install_pair
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);nse,bse=self.prepare(root)
+            bse.write_text("bad header")
+            with self.assertRaises(ValueError):install_pair(nse,bse,root)
+            self.assertEqual((root/"shared/GreekTokens.csv").read_text(),"previous GreekTokens.csv")
+            self.assertEqual((root/"shared/BSEIndexTokens.csv").read_text(),"previous BSEIndexTokens.csv")
+
+    def test_pair_installs_new_expiries_and_unchanged_refresh_is_noop(self):
+        from scripts.refresh_master import install_pair
+        from ke2_feed_server import Master
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);nse,bse=self.prepare(root)
+            result=install_pair(nse,bse,root,check=True)
+            self.assertFalse((root/"shared/NSE_MASTER_PROVENANCE.json").exists())
+            result=install_pair(nse,bse,root)
+            self.assertEqual(set(result["changed_files"]),{"GreekTokens.csv","BSEIndexTokens.csv"})
+            master=Master(root)
+            self.assertEqual(len(master.by_id),1500)
+            self.assertEqual({i.expiry for i in master.by_id.values() if i.symbol=="NIFTY"},
+                             set(result["near_term_nifty_expiries"]))
+            self.assertEqual((Path(result["previous_master_backup"])/"BSEIndexTokens.csv").read_text(),
+                             "previous BSEIndexTokens.csv")
+            second=install_pair(nse,bse,root)
+            self.assertEqual(second["changed_files"],[])
+            self.assertFalse(second["restart_required"])
+
+    def test_second_replace_failure_restores_first_master(self):
+        from scripts.refresh_master import install_pair
+        import os
+        real_replace=os.replace
+        calls=[]
+        def fail_second(source,target):
+            calls.append(str(target))
+            if len(calls)==2:raise OSError("fixture replacement failure")
+            return real_replace(source,target)
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);nse,bse=self.prepare(root)
+            with patch("scripts.refresh_master.os.replace",side_effect=fail_second):
+                with self.assertRaises(OSError):install_pair(nse,bse,root)
+            for name in ("GreekTokens.csv","BSEIndexTokens.csv"):
+                self.assertEqual((root/"shared"/name).read_text(),"previous "+name)
+
+
 if __name__ == "__main__":
     unittest.main()

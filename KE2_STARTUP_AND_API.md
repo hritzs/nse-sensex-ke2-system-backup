@@ -13,6 +13,24 @@ cd /home/administrator/projects/nse-fo-low-latency-decoder
 bash run_all.sh
 ~~~
 
+Each normal run first copies **both** current masters from the configured
+Windows share, verifies them, validates their combined instrument identities,
+and only then restarts the services. This updates NSE weekly/monthly and
+stock F&O contracts as well as BSE/SENSEX contracts. A failed copy or validation
+aborts before services are stopped. Unchanged masters are not replaced.
+
+This token-only refresh does not change daily references, LUTs, simulator
+databases or stored trades. Full reference/model refresh remains the explicit
+--refresh-inputs option and follows the existing same-day model binding rules.
+For deliberate offline use: bash run_all.sh --no-refresh-masters.
+Use --check for read-only local preflight; it does not copy or refresh files.
+
+All four consumers (decoder, KE2, Gamma and indicative) load masters at startup.
+An external update to the share or a local CSV is not a live reload. Run
+bash run_all.sh after such an update to refresh and reload all consumers
+together. API clients should rediscover instrument metadata and resubscribe;
+an explicit expired-expiry subscription is not silently moved to another date.
+
 This is the complete default stack: decoder, KE2, Gamma weekly simulator,
 indicative dashboard and FastAPI tester. It restarts only verified project
 services. It enables LAN binding for KE2, the simulator and FastAPI; indicative
@@ -22,7 +40,7 @@ Keep the terminal open; Ctrl+C stops the services started by that launcher.
 
 ~~~bash
 bash run_all.sh --check           # read-only; no restart
-bash run_all.sh --refresh-inputs  # refresh approved input sources, then restart
+bash run_all.sh --refresh-inputs  # explicitly refresh daily/LUT inputs too, then restart
 ~~~
 
 Current LAN entry points (recheck the server IP if it changes):

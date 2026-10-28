@@ -13,6 +13,7 @@ CHECK_ONLY=0
 REUSE_EXISTING=0
 RESTART=0
 REFRESH_INPUTS=0
+REFRESH_MASTERS=0
 KE2_BIND_HOST="${KE2_HOST:-127.0.0.1}"
 SIM_BIND_HOST="${MINUTE_HTTP_HOST:-127.0.0.1}"
 API_BIND_HOST="${KE2_API_HOST:-127.0.0.1}"
@@ -24,7 +25,7 @@ LOG_FILES=()
 
 usage() {
     cat <<'HELP'
-Usage: bash start_system.sh [--check] [--reuse-existing] [--no-simulator] [--no-indicative] [--with-api] [--restart] [--gamma-weekly] [--refresh-inputs] [--lan] [--lan-all]
+Usage: bash start_system.sh [--check] [--reuse-existing] [--no-simulator] [--no-indicative] [--with-api] [--restart] [--gamma-weekly] [--refresh-inputs] [--refresh-masters] [--lan] [--lan-all]
 
 Default: start decoder :9001, KE2 adapter :9002, NIFTY simulator :8000,
 and indicative-close :8100 if that independent service is not already running.
@@ -34,6 +35,7 @@ startup to stop, with no replacement or automatic restart.
 
 --lan             Bind the KE2 WebSocket feed on all interfaces for LAN clients.
 --lan-all         Also bind the simulator and FastAPI tester on all interfaces.
+--refresh-masters Verify/copy/install both NSE and BSE masters before startup.
 --refresh-inputs  Verify/copy current master, daily inputs, calendar and exact LUTs from the configured Windows share before startup.
 --restart         Stop identified project listeners first, then start services.
                   Unknown listeners abort before any signal is sent.
@@ -57,6 +59,7 @@ for arg in "$@"; do
         --check) CHECK_ONLY=1 ;;
         --restart) RESTART=1 ;;
         --refresh-inputs) REFRESH_INPUTS=1 ;;
+        --refresh-masters) REFRESH_MASTERS=1 ;;
         --lan) KE2_BIND_HOST="0.0.0.0" ;;
         --lan-all) KE2_BIND_HOST="0.0.0.0"; SIM_BIND_HOST="0.0.0.0"; API_BIND_HOST="0.0.0.0" ;;
         --gamma-weekly) SIMULATOR_SCRIPT="gamma_weekly_server.py" ;;
@@ -79,15 +82,24 @@ done
 [[ -x build-ke2/nse_decoder ]] || fail "Build first: cmake --build build-ke2 --target nse_decoder -j2"
 [[ -r ke2_feed_server.py ]] || fail "Missing ke2_feed_server.py"
 [[ -r scripts/system_endpoints.py ]] || fail "Missing scripts/system_endpoints.py"
-[[ -r shared/GreekTokens.csv && -r shared/BSEIndexTokens.csv ]] ||
-    fail "Both local instrument masters are required."
-if (( REFRESH_INPUTS )); then
-    (( CHECK_ONLY )) && fail "--check does not refresh files; run --refresh-inputs deliberately."
+# Serialize the complete refresh/stop/start sequence against other restarts.
+if (( RESTART && ! CHECK_ONLY )); then
+    mkdir -p logs
+    exec 8>logs/system-restart.lock
+    flock -n 8 || fail "Another project restart is active."
+fi
+if (( REFRESH_INPUTS || REFRESH_MASTERS )); then
+    (( CHECK_ONLY )) && fail "--check does not refresh files; use run_all.sh --check."
+    (( REUSE_EXISTING )) && fail "Master refresh requires a coordinated restart; do not reuse old services."
     command -v powershell.exe >/dev/null || fail "Windows PowerShell required for share refresh."
     REFRESH_SCRIPT=$(wslpath -w "$PROJECT_ROOT/scripts/refresh_market_inputs.ps1")
-    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$REFRESH_SCRIPT" || fail "Input refresh failed; services left running."
-    "$PYTHON_BIN" scripts/refresh_master.py --source data/reference_import/GreekTokens.csv || fail "Master validation failed; services left running."
+    REFRESH_ARGS=()
+    if (( ! REFRESH_INPUTS )); then REFRESH_ARGS+=(-MastersOnly); fi
+    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$REFRESH_SCRIPT" "${REFRESH_ARGS[@]}" || fail "Input refresh failed; services left running."
+    "$PYTHON_BIN" scripts/refresh_master.py --source data/reference_import/GreekTokens.csv --bse-source data/reference_import/BSEIndexTokens.csv || fail "Master validation failed; services left running."
 fi
+[[ -r shared/GreekTokens.csv && -r shared/BSEIndexTokens.csv ]] ||
+    fail "Both local instrument masters are required."
 "$PYTHON_BIN" -c 'import websockets; from websockets.asyncio.server import serve' ||
     fail "Install requirements-ke2.txt in the selected Python environment."
 [[ "$SIM_PORT" =~ ^[0-9]+$ ]] && (( 10#$SIM_PORT >= 1 && 10#$SIM_PORT <= 65535 )) ||
@@ -123,11 +135,6 @@ REQUIRED_PORTS=(9001 9002)
 if (( WITH_API )); then REQUIRED_PORTS+=(9003); fi
 if (( WITH_SIMULATOR )); then REQUIRED_PORTS+=("$SIM_PORT"); fi
 if (( RESTART && WITH_INDICATIVE )); then REQUIRED_PORTS+=(8100); fi
-if (( RESTART && ! CHECK_ONLY )); then
-    mkdir -p logs
-    exec 8>logs/system-restart.lock
-    flock -n 8 || fail "Another project restart is active."
-fi
 if (( RESTART )); then
     RESTART_ARGS=(--root "$PROJECT_ROOT" --ports "${REQUIRED_PORTS[@]}")
     if (( CHECK_ONLY )); then RESTART_ARGS+=(--check); fi

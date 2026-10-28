@@ -50,7 +50,77 @@ def validate(path, today):
         raise ValueError("Master lacks adequate NSE/current weekly coverage")
     return dict(instruments=len(tokens),near_term_nifty_expiries=sorted(dates),sha256=digest(path),excluded_rows=excluded)
 
-def install(source, root=ROOT, check=False):
+def install_pair(source, bse_source, root=ROOT, check=False):
+    # Validate a stable pair before replacing either live master. Consumers
+    # retain their loaded maps until the launcher performs a coordinated restart.
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from ke2_feed_server import Master
+    root = Path(root).resolve()
+    target_dir = root / "shared"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    sources = {"GreekTokens.csv": Path(source), "BSEIndexTokens.csv": Path(bse_source)}
+    with tempfile.TemporaryDirectory(prefix=".validated-masters-", dir=target_dir) as tmp:
+        stage = Path(tmp)
+        (stage / "shared").mkdir()
+        for name, original in sources.items():
+            before = original.stat()
+            shutil.copy2(original, stage / "shared" / name)
+            after = original.stat()
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise RuntimeError("Master changed during copy: " + name)
+        result = validate(stage / "shared/GreekTokens.csv", today)
+        master = Master(stage)
+        bse = [i for i in master.by_id.values() if i.exchange == "BSE"]
+        future_dates = sorted({i.expiry for i in bse if i.symbol == "SENSEX"
+                               and i.option_type is None
+                               and datetime.fromisoformat(i.expiry).date() >= today})
+        if len(bse) < 500 or not future_dates:
+            raise ValueError("BSE master lacks adequate contracts or an unexpired SENSEX future")
+        result.update(source=str(Path(source).resolve()),
+                      checked_at=datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(),
+                      bse={"source": str(Path(bse_source).resolve()),
+                           "instruments": len(bse), "sensex_future_expiries": future_dates,
+                           "sha256": digest(stage / "shared/BSEIndexTokens.csv")})
+        if check:
+            return result
+        expected = {"GreekTokens.csv": result["sha256"],
+                    "BSEIndexTokens.csv": result["bse"]["sha256"]}
+        changed = [name for name in sources
+                   if not (target_dir/name).exists() or digest(target_dir/name) != expected[name]]
+        result["changed_files"] = changed
+        if changed:
+            stamp = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y%m%d-%H%M%S-%f")
+            backup = root / "backups/master_refresh" / stamp
+            backup.mkdir(parents=True, exist_ok=False)
+            for name in changed:
+                if (target_dir/name).exists():
+                    shutil.copy2(target_dir/name, backup/name)
+            installed = []
+            try:
+                for name in changed:
+                    os.replace(stage/"shared"/name, target_dir/name)
+                    installed.append(name)
+            except OSError:
+                # A failed second replace must not leave mismatched live files.
+                for name in installed:
+                    previous = backup/name
+                    if previous.exists():
+                        shutil.copy2(previous, stage/name)
+                        os.replace(stage/name, target_dir/name)
+                    else:
+                        (target_dir/name).unlink()
+                raise
+            result["previous_master_backup"] = str(backup)
+        result["restart_required"] = bool(changed)
+        result["consumers"] = ["decoder", "KE2 adapter", "Gamma simulator", "indicative"]
+        (target_dir/"NSE_MASTER_PROVENANCE.json").write_text(json.dumps(result,indent=2)+"\n")
+        return result
+
+def install(source, root=ROOT, check=False, bse_source=None):
+    if bse_source is not None:
+        return install_pair(source, bse_source, root, check)
     today=datetime.now(ZoneInfo("Asia/Kolkata")).date()
     before=source.stat()
     result=validate(source,today)
@@ -77,5 +147,6 @@ if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source",type=Path,required=True)
     parser.add_argument("--check",action="store_true")
+    parser.add_argument("--bse-source",type=Path)
     args=parser.parse_args()
-    print(json.dumps(install(args.source.resolve(),check=args.check),indent=2))
+    print(json.dumps(install(args.source.resolve(),check=args.check, bse_source=args.bse_source),indent=2))

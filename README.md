@@ -2,7 +2,9 @@
 
 From Ubuntu WSL run bash run_all.sh. This starts/restarts the decoder, KE2,
 Gamma simulator, indicative dashboard and FastAPI tester, enables LAN access
-and prints their endpoints. Use bash run_all.sh --check for read-only preflight.
+and prints their endpoints. Each run verifies and refreshes both NSE and BSE
+masters from the configured share before restart. Use bash run_all.sh --check
+for read-only local preflight, or --no-refresh-masters for deliberate offline use.
 See [startup and endpoints](KE2_STARTUP_AND_API.md) for details.
 
 # NSE + SENSEX decoder, KE2 feed and Gamma simulator

@@ -1,3 +1,4 @@
+param([switch]$MastersOnly)
 # Copy authoritative feed/reference inputs; never stop or restart services.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -23,6 +24,8 @@ function Copy-Verified([string]$source, [string]$target) {
     }
 }
 Copy-Verified (Join-Path $share 'GreekTokens.csv') (Join-Path $root 'data\reference_import\GreekTokens.csv')
+Copy-Verified (Join-Path $share 'BSEIndexTokens.csv') (Join-Path $root 'data\reference_import\BSEIndexTokens.csv')
+if ($MastersOnly) { return }
 $daily = Join-Path $share 'Hardik\Project_Codes\GammaShortDailyProcess'
 Copy-Verified (Join-Path $daily 'GammaShortDailydata.csv') (Join-Path $root 'data\gamma_inputs\GammaShortDailydata.csv')
 Copy-Verified (Join-Path $share 'EventDates.xlsx') (Join-Path $root 'data\gamma_inputs\EventDates.xlsx')

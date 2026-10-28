@@ -1,23 +1,32 @@
 {
-  "instruments": 85903,
+  "instruments": 84823,
   "near_term_nifty_expiries": [
-    "2026-10-19",
-    "2026-10-27",
     "2026-11-03",
     "2026-11-09",
     "2026-11-17",
-    "2026-11-23"
+    "2026-11-23",
+    "2026-12-01"
   ],
-  "sha256": "f779a1da2be9312ea0e957085fcef7581a5aaca3ef26a755b984054e1bd22701",
-  "excluded_rows": [
-    {
-      "symbol": "PAGEIND",
-      "token": "1e+05",
-      "reason": "nondecimal_identifier"
-    }
-  ],
+  "sha256": "79da003ae5a141a33a6d32f60e62024c28e786d35ca4c70c5929dec620be2c22",
+  "excluded_rows": [],
   "source": "/home/administrator/projects/nse-fo-low-latency-decoder/data/reference_import/GreekTokens.csv",
-  "checked_at": "2026-10-19T13:01:41.191822+05:30",
-  "previous_master_backup": "/home/administrator/projects/nse-fo-low-latency-decoder/backups/master_refresh/20261019-073141",
-  "restart_required": "decoder, KE2 adapter, Gamma and indicative load at startup"
+  "checked_at": "2026-10-28T10:51:05.709033+05:30",
+  "bse": {
+    "source": "/home/administrator/projects/nse-fo-low-latency-decoder/data/reference_import/BSEIndexTokens.csv",
+    "instruments": 5940,
+    "sensex_future_expiries": [
+      "2026-10-29",
+      "2026-11-26",
+      "2026-12-31"
+    ],
+    "sha256": "c9728822e7a938bce38456daa4cf597ad89e3bf1fc276f72d1292ed5cc878881"
+  },
+  "changed_files": [],
+  "restart_required": false,
+  "consumers": [
+    "decoder",
+    "KE2 adapter",
+    "Gamma simulator",
+    "indicative"
+  ]
 }

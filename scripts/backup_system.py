@@ -53,9 +53,13 @@ def sqlite_snapshot(source,target):
     target.parent.mkdir(parents=True,exist_ok=True)
     started=time.monotonic()
     def progress(status,remaining,total):
-        if time.monotonic()-started>30:
-            raise TimeoutError("SQLite backup exceeded 30 seconds: "+str(source))
+        if time.monotonic()-started>120:
+            raise TimeoutError("SQLite backup exceeded 120 seconds: "+str(source))
     with closing(sqlite3.connect("file:"+quote(str(source))+"?mode=ro",uri=True,timeout=5)) as original:
+        # Pin a consistent read snapshot. Otherwise frequent external WAL
+        # commits can repeatedly restart a large incremental backup.
+        original.execute("BEGIN")
+        original.execute("SELECT rootpage FROM sqlite_master LIMIT 1").fetchall()
         with closing(sqlite3.connect(target)) as copy:
             original.backup(copy,pages=1024,progress=progress,sleep=.01)
             result=copy.execute("PRAGMA quick_check").fetchall()

@@ -13,6 +13,20 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class LauncherTest(unittest.TestCase):
+    def test_full_launcher_refreshes_masters_by_default_and_check_is_read_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root/"run_all.sh").write_text((ROOT/"run_all.sh").read_text())
+            (root/"start_system.sh").write_text('printf "%s\\n" "$@"\n')
+            for extra, refresh in [([],True),(["--check"],False),
+                                   (["--no-refresh-masters"],False),
+                                   (["--refresh-inputs"],False)]:
+                result = subprocess.run(["bash","run_all.sh",*extra],cwd=root,
+                                        text=True,capture_output=True,check=True)
+                self.assertEqual("--refresh-masters" in result.stdout.splitlines(),refresh)
+                for flag in ("--restart","--gamma-weekly","--with-api","--lan-all"):
+                    self.assertIn(flag,result.stdout.splitlines())
+
     def test_start_and_ctrl_c_stop_only_owned_children(self):
         self.exercise(False)
 
@@ -82,7 +96,7 @@ while True:time.sleep(.05)
             owned=[]
             try:
                 with output.open("w") as stream:
-                    args=["bash","run_all.sh"] if all_services else ["bash","start_system.sh","--no-indicative"]
+                    args=["bash","run_all.sh","--no-refresh-masters"] if all_services else ["bash","start_system.sh","--no-indicative"]
                     if with_api and not all_services:args.append("--with-api")
                     process=subprocess.Popen(args,
                         cwd=root,env=env,stdout=stream,stderr=subprocess.STDOUT)

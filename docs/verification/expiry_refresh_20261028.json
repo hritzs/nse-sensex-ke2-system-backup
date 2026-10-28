@@ -1,0 +1,77 @@
+{
+  "checked_at": "2026-10-28T10:42:50.991400+05:30",
+  "nse_loaded": 84801,
+  "bse_loaded": 5940,
+  "gamma_expiries": [
+    "2026-11-03",
+    "2026-11-09",
+    "2026-11-17",
+    "2026-11-23",
+    "2026-12-01"
+  ],
+  "gamma_reference_fingerprint": "774a90cdbea20f94d87b2a30ae8a657595b2cc944a5e7af6c3222fa40f01fb76",
+  "gamma_errors": [],
+  "gamma_freshness": {
+    "2026-11-03": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.022,
+      "last_quote_received": "2026-10-28T10:42:50.960843+05:30"
+    },
+    "2026-11-09": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.043,
+      "last_quote_received": "2026-10-28T10:42:50.940228+05:30"
+    },
+    "2026-11-17": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.044,
+      "last_quote_received": "2026-10-28T10:42:50.938579+05:30"
+    },
+    "2026-11-23": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.044,
+      "last_quote_received": "2026-10-28T10:42:50.939010+05:30"
+    },
+    "2026-12-01": {
+      "status": "FRESH",
+      "quote_age_seconds": 0.049,
+      "last_quote_received": "2026-10-28T10:42:50.933862+05:30"
+    }
+  },
+  "ke2_metadata": [
+    {
+      "symbol": "NIFTY",
+      "expiry": "2026-12-01",
+      "instruments": 434
+    },
+    {
+      "symbol": "SENSEX",
+      "expiry": "2026-11-26",
+      "instruments": 397
+    }
+  ],
+  "live_probes": [
+    {
+      "symbol": "NIFTY",
+      "expiry": "2026-11-23",
+      "streaming_rows": 11,
+      "source_disconnected_heartbeats": 0
+    },
+    {
+      "symbol": "SENSEX",
+      "expiry": "2026-11-26",
+      "streaming_rows": 8,
+      "source_disconnected_heartbeats": 0
+    },
+    {
+      "symbol": "RELIANCE",
+      "expiry": "2026-11-23",
+      "streaming_rows": 11,
+      "source_disconnected_heartbeats": 0
+    }
+  ],
+  "indicative_symbols_checked": 224,
+  "indicative_expiries": [
+    "23-NOV-26"
+  ]
+}
