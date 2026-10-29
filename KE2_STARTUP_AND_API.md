@@ -1,3 +1,5 @@
+> Native SDK update: the managed stack is operator-paused. See [Windows DLL and Linux shared-library instructions](sdk/README.md). Resume only when intended.
+
 > Deployment update, 29 October 2026: see [daily BOD, corrected BSE feed and all listed expiries](BOD_AND_SENSEX.md). Earlier deployment/capability statements below are historical.
 
 # Start and use the NSE + SENSEX feed system

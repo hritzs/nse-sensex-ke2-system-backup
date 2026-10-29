@@ -386,3 +386,14 @@ start_system.sh -> decoder, KE2, Gamma, indicative and FastAPI.
 The receipt prevents duplicate refresh. Failed new-day inputs stop stale-day
 operation. EQ index and FO outright streams use separate multicast listeners.
 Cash depth and complex instruments have no master mapping and are excluded.
+
+## Native decoder SDK
+
+sdk/CMakeLists.txt builds ke2_feed.dll on Windows x64 and libke2_feed.so on
+Linux x64 from the shared decoder/parser/market event sources. The C ABI
+owns validated token maps, callbacks and optional multicast workers; analytics
+hooks are deliberately inactive in the SDK. The executable's normal build
+retains its original analytics path. One context per process is supported.
+Master reload requires stopped input; startup rolls back all sockets if any
+stream fails. Stop joins workers before destroy/unload. SDK_README is
+sdk/README.md; the service stack is operator-paused during SDK delivery.

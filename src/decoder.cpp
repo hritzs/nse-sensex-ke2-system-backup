@@ -179,6 +179,9 @@ static bool decompress_lzo(
 
 static void print_stats()
 {
+#ifdef KE2_FEED_LIBRARY
+    return;
+#endif
     std::unique_lock<std::mutex> lock(FEED_LOG_MUTEX, std::try_to_lock);
     if (!lock.owns_lock()) return;
     static uint64_t last_print = 0;
@@ -305,6 +308,9 @@ void parse_bse_nfcast(const uint8_t* buf, size_t len) {
             publish_market_quote(Exchange::BSE, token, ltp, best_bid, best_ask,
                                  record.ltq, record.bid_qty, record.ask_qty, record.volume);
 
+#ifdef KE2_FEED_LIBRARY
+        continue; // Embedded raw-feed library does not run analytics.
+#endif
         // ----------------------------------
         // PUSH TO ANALYTICS
         // ----------------------------------
@@ -402,6 +408,9 @@ void parse_bse_nfcast(const uint8_t* buf, size_t len) {
 
 static void dump_market_record(const char* tag, const uint8_t* p, size_t n)
 {
+#ifdef KE2_FEED_LIBRARY
+    return;
+#endif
     static int count = 0;
 
     if (count >= 20)
@@ -601,7 +610,13 @@ void process_packet(Exchange exchange, const uint8_t* buf, size_t len)
         } catch (const std::out_of_range& error) {
             dropped_packets++;
             static std::atomic<unsigned> reports{0};
-            if (reports.fetch_add(1) < 5) {
+            if (reports.fetch_add(1) < 5
+#ifndef KE2_FEED_LIBRARY
+                && true
+#else
+                && false
+#endif
+            ) {
                 std::lock_guard<std::mutex> lock(FEED_LOG_MUTEX);
                 std::cout << "[BSE REJECT] type=" << (len>=4 ? be32(buf):0)
                           << " bytes=" << len << " reason=" << error.what() << std::endl;

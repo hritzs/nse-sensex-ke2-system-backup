@@ -1,0 +1,7 @@
+{
+  "platform": "Windows x64",
+  "native_dll_tests": "Earlier native runs passed DLL loading, compressed/uncompressed NSE, BSE depth/index and multicast lifecycle",
+  "final_packaged_smoke": "Blocked by Windows Application Control",
+  "security_policy_changed": false,
+  "note": "Final smoke executable was rebuilt to use OS-assigned ports; no policy bypass was attempted."
+}

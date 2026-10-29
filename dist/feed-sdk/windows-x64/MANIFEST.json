@@ -1,0 +1,17 @@
+{
+  "platform": "windows",
+  "architecture": "x86_64",
+  "abi_version": 1,
+  "lzo_source": "https://deb.debian.org/debian/pool/main/l/lzo2/lzo2_2.10.orig.tar.gz",
+  "lzo_source_sha256": "c0f892943208266f9b6543b3ae308fab6284c5c90e627931446fb49b4221a072",
+  "files": {
+    "ke2_feed.dll": "71de587ccda537c6ec2de34e39a1a8a86abccc00d0ebdc0c3c4985c4ec143e06",
+    "ke2_feed.def": "80b2ba810b102375185df3f3be33877c0f9ab77e8c4aa76513595647c36ac3de",
+    "README.md": "910ed1921ddc4895983072c89eccac1e2e52dd7164e36b2f31ebc26699456d60",
+    "ke2_feed.h": "f297766e451a39d02faf3abee9409fbbc6c8d20784efe83db0054c6eb5249641",
+    "COPYING.LZO": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "ke2_feed_smoke.exe": "7670c4c3e2f0d4cb23c27dfbb08aa4fbbfa1a2c47d02450dc6de34004313d0ac",
+    "libke2_feed.dll.a": "7922642b7ed599d85d996e6ec59386f5e40c6b679eb062b53fd2f9bf0c3022c1",
+    "feed_client.py": "5cec1ea51fcecd4b72856762de211d9009d3e284b13e22cf1a9ef9e9070b827d"
+  }
+}

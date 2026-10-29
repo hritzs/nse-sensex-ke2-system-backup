@@ -1,0 +1,68 @@
+[
+  {
+    "command": [
+      "venv/bin/python",
+      "scripts/build_feed_sdk.py",
+      "--platform",
+      "all"
+    ],
+    "exit_code": 0,
+    "stdout": "BUILD ['cmake', '-S', PosixPath('/home/administrator/projects/nse-fo-low-latency-decoder/sdk'), '-B', PosixPath('/home/administrator/projects/nse-fo-low-latency-decoder/build-sdk-linux'), '-DCMAKE_BUILD_TYPE=Release']\n-- Configuring done (0.0s)\n-- Generating done (0.0s)\n-- Build files have been written to: /home/administrator/projects/nse-fo-low-latency-decoder/build-sdk-linux\nBUILD ['cmake', '--build', PosixPath('/home/administrator/projects/nse-fo-low-latency-decoder/build-sdk-linux'), '-j2']\n[ 14%] Linking CXX shared library libke2_feed.so\n[ 71%] Built target ke2_feed\n[ 85%] Linking C executable ke2_feed_smoke\n[100%] Built target ke2_feed_smoke\nBUILD ['ctest', '--test-dir', PosixPath('/home/administrator/projects/nse-fo-low-latency-decoder/build-sdk-linux'), '--output-on-failure']\nTest project /home/administrator/projects/nse-fo-low-latency-decoder/build-sdk-linux\n    Start 1: sdk_smoke\n1/1 Test #1: sdk_smoke ........................   Passed    0.02 sec\n\n100% tests passed, 0 tests failed out of 1\n\nTotal Test time (real) =   0.02 sec\nSDK_PACKAGE=/home/administrator/projects/nse-fo-low-latency-decoder/dist/feed-sdk/linux-x64\nBUILD ['cmake', '-S', PosixPath('/home/administrator/projects/nse-fo-low-latency-decoder/sdk'), '-B', PosixPath('/home/administrator/projects/nse-fo-low-latency-decoder/build-sdk-windows/library'), '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_TOOLCHAIN_FILE=/home/administrator/projects/nse-fo-low-latency-decoder/sdk/cmake/mingw-x64.cmake', '-DLZO_INCLUDE_DIR=/home/administrator/projects/nse-fo-low-latency-decoder/build-sdk-windows/lzo-install/include', '-DLZO_LIBRARY=/home/administrator/projects/nse-fo-low-latency-decoder/build-sdk-windows/lzo-install/lib/liblzo2.a']\n-- Configuring done (0.0s)\n-- Generating done (0.0s)\n-- Build files have been written to: /home/administrator/projects/nse-fo-low-latency-decoder/build-sdk-windows/library\nBUILD ['cmake', '--build', PosixPath('/home/administrator/projects/nse-fo-low-latency-decoder/build-sdk-windows/library'), '-j2']\n[ 71%] Built target ke2_feed\n[100%] Built target ke2_feed_smoke\nSDK_PACKAGE=/home/administrator/projects/nse-fo-low-latency-decoder/dist/feed-sdk/windows-x64\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "venv/bin/python",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "sdk/tests",
+      "-p",
+      "test_sdk.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "test_concurrent_injection_is_serialized (test_sdk.SDKTests.test_concurrent_injection_is_serialized) ... ok\ntest_local_multicast_delivery_and_stop (test_sdk.SDKTests.test_local_multicast_delivery_and_stop) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.493s\n\nOK\n"
+  },
+  {
+    "command": [
+      "venv/bin/python",
+      "sdk/examples/feed_client.py",
+      "--library",
+      "dist/feed-sdk/linux-x64/libke2_feed.so",
+      "--nse-master",
+      "shared/GreekTokens.csv",
+      "--bse-master",
+      "shared/BSEIndexTokens.csv"
+    ],
+    "exit_code": 0,
+    "stdout": "{\"loaded_instruments\": 86011}\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "cmake",
+      "--build",
+      "build-ke2",
+      "--target",
+      "test_bse_feed",
+      "-j2"
+    ],
+    "exit_code": 0,
+    "stdout": "[ 20%] Building CXX object CMakeFiles/test_bse_feed.dir/src/decoder.cpp.o\n[ 40%] Linking CXX executable test_bse_feed\n[100%] Built target test_bse_feed\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "ctest",
+      "--test-dir",
+      "build-ke2",
+      "--output-on-failure"
+    ],
+    "exit_code": 0,
+    "stdout": "Test project /home/administrator/projects/nse-fo-low-latency-decoder/build-ke2\n    Start 1: bse_feed\n1/1 Test #1: bse_feed .........................   Passed    0.00 sec\n\n100% tests passed, 0 tests failed out of 1\n\nTotal Test time (real) =   0.01 sec\n",
+    "stderr": ""
+  }
+]

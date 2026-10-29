@@ -817,3 +817,14 @@ Nine post-WAP fields precede depth; side indicators are raw shorts. Entire
 packets parse before publishing. EQ 2011/2012 produces market_index with
 real exchange identity/value/local receipt; FastAPI /indices exposes snapshots.
 Explicit-strike subscriptions validate listed strikes before replacing state.
+
+## Native decoder SDK
+
+sdk/CMakeLists.txt builds ke2_feed.dll on Windows x64 and libke2_feed.so on
+Linux x64 from the shared decoder/parser/market event sources. The C ABI
+owns validated token maps, callbacks and optional multicast workers; analytics
+hooks are deliberately inactive in the SDK. The executable's normal build
+retains its original analytics path. One context per process is supported.
+Master reload requires stopped input; startup rolls back all sockets if any
+stream fails. Stop joins workers before destroy/unload. SDK_README is
+sdk/README.md; the service stack is operator-paused during SDK delivery.

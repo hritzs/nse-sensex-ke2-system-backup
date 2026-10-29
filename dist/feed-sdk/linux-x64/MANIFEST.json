@@ -1,0 +1,18 @@
+{
+  "platform": "linux",
+  "architecture": "x86_64",
+  "abi_version": 1,
+  "lzo_source": "https://deb.debian.org/debian/pool/main/l/lzo2/lzo2_2.10.orig.tar.gz",
+  "lzo_source_sha256": "c0f892943208266f9b6543b3ae308fab6284c5c90e627931446fb49b4221a072",
+  "files": {
+    "ke2_feed_smoke": "a8ee38a8dd0f8530cd6612300d137a2b8c6ff23c42d6a3f71cb89a4e60e39657",
+    "libke2_feed.so.1": "83c783a90884995aa6ff397b6bdb0958a3e30b16d48fc21ca9228f4d3bcd90cc",
+    "ke2_feed.def": "80b2ba810b102375185df3f3be33877c0f9ab77e8c4aa76513595647c36ac3de",
+    "README.md": "910ed1921ddc4895983072c89eccac1e2e52dd7164e36b2f31ebc26699456d60",
+    "ke2_feed.h": "f297766e451a39d02faf3abee9409fbbc6c8d20784efe83db0054c6eb5249641",
+    "COPYING.LZO": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "libke2_feed.so.1.0.0": "83c783a90884995aa6ff397b6bdb0958a3e30b16d48fc21ca9228f4d3bcd90cc",
+    "feed_client.py": "5cec1ea51fcecd4b72856762de211d9009d3e284b13e22cf1a9ef9e9070b827d",
+    "libke2_feed.so": "83c783a90884995aa6ff397b6bdb0958a3e30b16d48fc21ca9228f4d3bcd90cc"
+  }
+}

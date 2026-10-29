@@ -93,8 +93,8 @@
     },
     {
       "path": "KE2_STARTUP_AND_API.md",
-      "bytes": 24729,
-      "sha256": "b13c24915fa65666c7aba5279aad13c01aa74eafcd290c6b3f4a1510c2f0a78e"
+      "bytes": 24888,
+      "sha256": "0b1a33b58f58b35015ecb437a82916f237f00785b9370189a3ba0aaad549e54d"
     },
     {
       "path": "KE2_WebSim_Feed_Spec(1).json",
@@ -955,6 +955,16 @@
       "path": "run_all.sh",
       "bytes": 1267,
       "sha256": "7b1d20b9b0c821fc4560b3f01cc9efd4a436d45b82f4b51c9531bb22fb9cf1aa"
+    },
+    {
+      "path": "sdk-bse-20512.csv",
+      "bytes": 91,
+      "sha256": "dd3d33f67baf2eeddc573adcb90aba5f2b6e4705d1cca353bafc1396eb5be831"
+    },
+    {
+      "path": "sdk-nse-20512.csv",
+      "bytes": 93,
+      "sha256": "3b3cbec71ba1d80bfdd11d5d723093501fb5c12bf48317e6d40692ed39e8a16c"
     },
     {
       "path": "server.js",
@@ -1837,19 +1847,89 @@
       "sha256": "eca825d34476f15a135613a87502c7ee0f86a659e9e6c5d83763660a01787049"
     },
     {
+      "path": "dist/feed-sdk/SHA256SUMS",
+      "bytes": 278,
+      "sha256": "438ad1cd404a6b0cc79ec1b290bb840a0e0bda6841dca13f0801693cc0251131"
+    },
+    {
+      "path": "dist/feed-sdk/linux-x64/COPYING.LZO",
+      "bytes": 18092,
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+    },
+    {
+      "path": "dist/feed-sdk/linux-x64/MANIFEST.json",
+      "bytes": 1074,
+      "sha256": "676f515501a91f9750ba2653c966061fe39efd3b189dd1ce9cef0cb8ae4c122b"
+    },
+    {
+      "path": "dist/feed-sdk/linux-x64/README.md",
+      "bytes": 7624,
+      "sha256": "910ed1921ddc4895983072c89eccac1e2e52dd7164e36b2f31ebc26699456d60"
+    },
+    {
+      "path": "dist/feed-sdk/linux-x64/feed_client.py",
+      "bytes": 3092,
+      "sha256": "5cec1ea51fcecd4b72856762de211d9009d3e284b13e22cf1a9ef9e9070b827d"
+    },
+    {
+      "path": "dist/feed-sdk/linux-x64/ke2_feed.def",
+      "bytes": 258,
+      "sha256": "80b2ba810b102375185df3f3be33877c0f9ab77e8c4aa76513595647c36ac3de"
+    },
+    {
+      "path": "dist/feed-sdk/linux-x64/ke2_feed.h",
+      "bytes": 2682,
+      "sha256": "f297766e451a39d02faf3abee9409fbbc6c8d20784efe83db0054c6eb5249641"
+    },
+    {
+      "path": "dist/feed-sdk/windows-x64/COPYING.LZO",
+      "bytes": 18092,
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+    },
+    {
+      "path": "dist/feed-sdk/windows-x64/MANIFEST.json",
+      "bytes": 983,
+      "sha256": "37eb41bdd444ac6a07af2cdc0f959ef9140a0bde396b8d3315443437ddb6be49"
+    },
+    {
+      "path": "dist/feed-sdk/windows-x64/README.md",
+      "bytes": 7624,
+      "sha256": "910ed1921ddc4895983072c89eccac1e2e52dd7164e36b2f31ebc26699456d60"
+    },
+    {
+      "path": "dist/feed-sdk/windows-x64/feed_client.py",
+      "bytes": 3092,
+      "sha256": "5cec1ea51fcecd4b72856762de211d9009d3e284b13e22cf1a9ef9e9070b827d"
+    },
+    {
+      "path": "dist/feed-sdk/windows-x64/ke2_feed.def",
+      "bytes": 258,
+      "sha256": "80b2ba810b102375185df3f3be33877c0f9ab77e8c4aa76513595647c36ac3de"
+    },
+    {
+      "path": "dist/feed-sdk/windows-x64/ke2_feed.h",
+      "bytes": 2682,
+      "sha256": "f297766e451a39d02faf3abee9409fbbc6c8d20784efe83db0054c6eb5249641"
+    },
+    {
+      "path": "dist/feed-sdk/windows-x64/libke2_feed.dll.a",
+      "bytes": 7536,
+      "sha256": "7922642b7ed599d85d996e6ec59386f5e40c6b679eb062b53fd2f9bf0c3022c1"
+    },
+    {
       "path": "docs/architecture/ADR.md",
       "bytes": 5926,
       "sha256": "b3b17e1327cf0c4ede10b9cfdc1ef0acc4f236dfee24dab5cee5dd80ffb7c95e"
     },
     {
       "path": "docs/architecture/HLD.md",
-      "bytes": 21617,
-      "sha256": "e4afc05df9b1ad04194a82bc0eaf977df8ddf0b66bd7ab0a4ef546706ff5b9ef"
+      "bytes": 22237,
+      "sha256": "2359439cf02275103b96d7b14e712900e9219beaeb2d0248d605b94f6973e067"
     },
     {
       "path": "docs/architecture/LLD.md",
-      "bytes": 39240,
-      "sha256": "cb2763a5e553a10715b81aaf2c25bcbf6d86daaea62af953b473b5ed6d76c6a8"
+      "bytes": 39860,
+      "sha256": "4ef502ca5f362c95c6a7621f36a96483961359e2a92fb02854745ca57ae0c5f8"
     },
     {
       "path": "docs/architecture/README.md",
@@ -1905,6 +1985,21 @@
       "path": "docs/verification/latest_deployment.json",
       "bytes": 2078,
       "sha256": "f7d3f0c92af84eec6c60279d8acce5719bdfe9832f9520db35529b81a9d97298"
+    },
+    {
+      "path": "docs/verification/native_sdk_20261029.json",
+      "bytes": 4070,
+      "sha256": "86f97ada78817dc62c01ddc6a46092b723f66c80476bc0839f1a07aedbccca73"
+    },
+    {
+      "path": "docs/verification/native_sdk_capture_20261029.json",
+      "bytes": 117,
+      "sha256": "0d5da264e33fcc0652564ea31dc927c2dc6f23c5fca534cfe669cf4c2e8ee30a"
+    },
+    {
+      "path": "docs/verification/native_sdk_windows_20261029.json",
+      "bytes": 376,
+      "sha256": "d85a8f783c0949c52968f8affbb20947b4b692e10f18f0107b554ff2f1a2c38e"
     },
     {
       "path": "docs/verification/run_all_checks.json",
@@ -2462,6 +2557,11 @@
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "path": "scripts/build_feed_sdk.py",
+      "bytes": 5192,
+      "sha256": "452b1713344c078768b1d48dc0fea227f0ae6eb41a2826788c3388c80f56aabf"
+    },
+    {
       "path": "scripts/check_gamma_inputs.py",
       "bytes": 1583,
       "sha256": "19b411cdc83e1a18817dc94734e7bd8063c5bcdc0acc7df61b690918c9d569f4"
@@ -2520,6 +2620,56 @@
       "path": "scripts/system_endpoints.py",
       "bytes": 4622,
       "sha256": "24c82019b246e59489e37d5369c50e1d4e51bf9d2f68ada82042f3ccf04e6f59"
+    },
+    {
+      "path": "sdk/CMakeLists.txt",
+      "bytes": 1875,
+      "sha256": "c18cf24b39e1bb68ce6a8082425681674e356948333df85017d0095c44b2d924"
+    },
+    {
+      "path": "sdk/README.md",
+      "bytes": 7624,
+      "sha256": "910ed1921ddc4895983072c89eccac1e2e52dd7164e36b2f31ebc26699456d60"
+    },
+    {
+      "path": "sdk/ke2_feed.def",
+      "bytes": 258,
+      "sha256": "80b2ba810b102375185df3f3be33877c0f9ab77e8c4aa76513595647c36ac3de"
+    },
+    {
+      "path": "sdk/cmake/exports.map",
+      "bytes": 35,
+      "sha256": "f709521d4be0ea5b23e2ca4926d565a0bb9cfdb42e164e4c151f5703cb982547"
+    },
+    {
+      "path": "sdk/cmake/mingw-x64.cmake",
+      "bytes": 391,
+      "sha256": "f66aa762339e0dacd3ad1dcd301ab1335da54fcc5c6840f411347c4e01d34e15"
+    },
+    {
+      "path": "sdk/examples/feed_client.py",
+      "bytes": 3092,
+      "sha256": "5cec1ea51fcecd4b72856762de211d9009d3e284b13e22cf1a9ef9e9070b827d"
+    },
+    {
+      "path": "sdk/include/ke2_feed.h",
+      "bytes": 2682,
+      "sha256": "f297766e451a39d02faf3abee9409fbbc6c8d20784efe83db0054c6eb5249641"
+    },
+    {
+      "path": "sdk/src/feed_sdk.cpp",
+      "bytes": 16522,
+      "sha256": "4e6e06c8f62c534be2c16cc44a2c5c4b5a9697e7737e7cfeab3f7071f9274bea"
+    },
+    {
+      "path": "sdk/tests/sdk_smoke.c",
+      "bytes": 6337,
+      "sha256": "9824e617f6f18e2d7b61b1a164dd9b0d581b2077bf39910fd9104b1fcb584b48"
+    },
+    {
+      "path": "sdk/tests/test_sdk.py",
+      "bytes": 3636,
+      "sha256": "6425f5b8acfaa40bef3e7b88db85ef361f07eb2360d1b5798ccece9aeba04cfd"
     },
     {
       "path": "shared/BSEIndexTokens.csv",
@@ -2698,8 +2848,8 @@
     },
     {
       "path": "src/decoder.cpp",
-      "bytes": 23679,
-      "sha256": "4895853b230ba6a890861ef2740c32b9816904605c94eec225eb08200c635c4e"
+      "bytes": 23967,
+      "sha256": "528e515f1d29a95fe48da3dc5df31de0d5c636a2138115ad731e19a0f632ebf2"
     },
     {
       "path": "src/decoder.cpp.backup_steady_ns_20260820_052007",

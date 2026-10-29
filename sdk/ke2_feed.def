@@ -1,0 +1,12 @@
+LIBRARY ke2_feed
+EXPORTS
+    ke2_feed_abi_version
+    ke2_feed_last_error
+    ke2_feed_create
+    ke2_feed_reload_masters
+    ke2_feed_instruments
+    ke2_feed_process_datagram
+    ke2_feed_start
+    ke2_feed_stop
+    ke2_feed_get_stats
+    ke2_feed_destroy
