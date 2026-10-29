@@ -1,8 +1,8 @@
-param([switch]$MastersOnly)
+param([switch]$MastersOnly, [string]$OutputRoot, [string]$ShareRoot)
 # Copy authoritative feed/reference inputs; never stop or restart services.
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
-$share = if ($env:KE2_INPUT_SHARE) { $env:KE2_INPUT_SHARE } else { '\\172.16.1.85\Shared' }
+$root = if ($OutputRoot) { $OutputRoot } else { Split-Path -Parent $PSScriptRoot }
+$share = if ($ShareRoot) { $ShareRoot } elseif ($env:KE2_INPUT_SHARE) { $env:KE2_INPUT_SHARE } else { '\\172.16.1.85\Shared' }
 function Copy-Verified([string]$source, [string]$target) {
     $before = Get-Item -LiteralPath $source
     $parent = Split-Path -Parent $target
@@ -33,3 +33,31 @@ $lut = Join-Path $share 'GammaShortData\GammaShort\LUTS_r46V2_cwnw_adj007_005_T1
 foreach ($name in @('LUT_0916.csv','LUT_0917.csv','LUT_0918.csv','LUT_0919.csv','LUT_0920_Onwards.csv','NW_LUT.csv')) {
     Copy-Verified (Join-Path $lut $name) (Join-Path $root ('live_lut\final_r46V2\' + $name))
 }
+
+# Previous available trading-day references. Dates come from filenames, not
+# filesystem order; never label an older file as today's exchange data.
+$bhav = @()
+foreach ($item in @(
+    @('NSEfobhav','NSEfo','shared\bod_bhavcopy\nse-fo'),
+    @('BSEfobhav','BSEfo','shared\bod_bhavcopy\bse-fo'),
+    @('NSEcmbhav','NSEcm','shared\cm_bhavcopy')
+)) {
+    $directory = Join-Path $share ('Hardik\Bhavcopy\' + $item[0])
+    $pattern = '^' + $item[1] + '(\d{2}[A-Za-z]{3}\d{4})bhav\.csv$'
+    $latest = Get-ChildItem -LiteralPath $directory -File |
+        ForEach-Object {
+            if ($_.Name -match $pattern) {
+                $date = [datetime]::ParseExact($Matches[1], 'ddMMMyyyy',
+                    [Globalization.CultureInfo]::InvariantCulture)
+                if ($date.Date -lt [datetime]::Today) {
+                    [PSCustomObject]@{ File = $_; TradeDate = $date }
+                }
+            }
+        } | Sort-Object TradeDate -Descending | Select-Object -First 1
+    if (!$latest) { throw "No previous available bhavcopy in $directory" }
+    $target = Join-Path $root ($item[2] + '\current.csv')
+    Copy-Verified $latest.File.FullName $target
+    $bhav += [PSCustomObject]@{ Segment=$item[1]; Source=$latest.File.FullName;
+        TradeDate=$latest.TradeDate.ToString('yyyy-MM-dd'); Target=$target }
+}
+$bhav | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'data\reference_import\BHAVCOPY_SOURCES.json') -Encoding UTF8

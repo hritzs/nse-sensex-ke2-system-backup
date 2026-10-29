@@ -6,6 +6,7 @@ import subprocess
 
 API_ROUTES = [
     ("GET", "/health"), ("GET", "/capabilities"), ("GET", "/instruments"),
+    ("GET", "/indices"), ("GET", "/bod/status"),
     ("GET", "/sessions"), ("POST", "/sessions"),
     ("GET", "/sessions/{session_id}"), ("DELETE", "/sessions/{session_id}"),
     ("POST", "/sessions/{session_id}/subscribe"),
@@ -62,7 +63,7 @@ def main(argv=None):
     if not a.no_api and a.api_host == "0.0.0.0":
         print(f"  FastAPI Swagger:          http://{lan}:9003/docs")
     print("\nKE2 uses WebSocket JSON messages, not HTTP REST:")
-    print("  instrument_master, subscribe, unsubscribe, snapshot, resume")
+    print("  instrument_master, subscribe, unsubscribe, snapshot, resume, indices")
     print("  Server: capabilities, quote, heartbeat and error.")
     if not a.no_simulator:
         print(f"\nSimulator routes (port {a.sim_port}, {a.simulator}):")

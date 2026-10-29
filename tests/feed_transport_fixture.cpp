@@ -26,6 +26,7 @@ int main(int argc,char** argv) {
  u32(p,200);p.resize(p.size()+46);u16(p,1);p.resize(p.size()+12);
  u32(p,0);u32(p,10);u32(p,10000);
  for(int i=0;i<12;++i)u16(p,0);
+ for(int i=0;i<9;++i)u16(p,0); // NFCAST 6.3 auction/reserved fields
  u16(p,static_cast<uint16_t>(-5));for(int i=0;i<4;++i)u16(p,0);
  u16(p,5);for(int i=0;i<4;++i)u16(p,0);
  // Two NSE MBP records: an actual stock future and a stock option.

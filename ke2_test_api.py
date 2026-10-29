@@ -7,6 +7,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 import os
 from typing import Annotated, Literal
 import uuid
@@ -182,6 +183,8 @@ class Session:
                             return [message]
                     elif typ == "unsubscribe" and kind == "unsubscribed":
                         return [message]
+                    elif typ == "indices" and kind == "indices" and message.get("snapshot"):
+                        return [message]
                     elif typ == "instrument_master" and kind == "instrument_master":
                         result.append(message)
                         if not message.get("more"):
@@ -269,6 +272,26 @@ def create_app(upstream=None, timeout=10):
             return session.capabilities
         finally:
             await session.close()
+
+    @app.get("/indices", tags=["Discovery"])
+    async def indices(symbol: str | None = None):
+        """Actual observed index snapshots, including SENSEX from BSE EQ."""
+        session = Session(uri,timeout)
+        try:
+            await session.open()
+            request = {"type": "indices"}
+            if symbol is not None: request["symbols"] = [symbol.upper()]
+            return (await session.command(request))[0]
+        finally:
+            await session.close()
+
+    @app.get("/bod/status", tags=["Discovery"])
+    async def bod_status():
+        """Last daily preparation outcome; separate from price freshness."""
+        path = Path(__file__).resolve().parent/"data/bod/status.json"
+        if not path.exists():
+            return {"state": "NOT_INSTALLED"}
+        return json.loads(path.read_text())
 
     @app.get("/instruments", tags=["Discovery"])
     async def instruments(expiry: str | None = None, symbol: str | None = None):

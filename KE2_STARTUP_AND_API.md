@@ -1,3 +1,5 @@
+> Deployment update, 29 October 2026: see [daily BOD, corrected BSE feed and all listed expiries](BOD_AND_SENSEX.md). Earlier deployment/capability statements below are historical.
+
 # Start and use the NSE + SENSEX feed system
 
 Updated 19 October 2026. Run commands in Ubuntu WSL from:

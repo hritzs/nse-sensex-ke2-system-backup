@@ -431,7 +431,8 @@ namespace
 
         std::tm tm{};
 
-        localtime_r(&tt, &tm);
+        const std::time_t ist_tt = tt + 5 * 3600 + 30 * 60;
+        gmtime_r(&ist_tt, &tm);
 
         const auto ms =
             duration_cast<milliseconds>(

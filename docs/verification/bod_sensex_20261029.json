@@ -1,0 +1,288 @@
+{
+  "checked_at": "2026-10-29T10:46:39.124424+05:30",
+  "quotes": [
+    {
+      "symbol": "SENSEX",
+      "instrument_id": 864571,
+      "expiry": "2026-10-29",
+      "streaming_rows": 13,
+      "last_quote": {
+        "instrument_id": 864571,
+        "ltp": 73833.05,
+        "bid": 73826.3,
+        "ask": 73855.6,
+        "oi": null,
+        "volume": 16800,
+        "exchange_ts": null,
+        "last_trade_ts": null,
+        "ltq": 40,
+        "bid_qty": 40,
+        "ask_qty": 40,
+        "received_ts": "2026-10-29T10:46:37.158+05:30"
+      }
+    },
+    {
+      "symbol": "NIFTY",
+      "instrument_id": 61471,
+      "expiry": "2026-11-23",
+      "streaming_rows": 15,
+      "last_quote": {
+        "instrument_id": 61471,
+        "ltp": 22950.1,
+        "bid": 22950,
+        "ask": 22954.8,
+        "oi": 16092050,
+        "volume": null,
+        "exchange_ts": null,
+        "last_trade_ts": null,
+        "ltq": null,
+        "bid_qty": null,
+        "ask_qty": null,
+        "received_ts": "2026-10-29T10:46:38.710+05:30"
+      }
+    },
+    {
+      "symbol": "RELIANCE",
+      "instrument_id": 61697,
+      "expiry": "2026-11-23",
+      "streaming_rows": 15,
+      "last_quote": {
+        "instrument_id": 61697,
+        "ltp": 1182.1,
+        "bid": 1182.1,
+        "ask": 1182.2,
+        "oi": 150622000,
+        "volume": null,
+        "exchange_ts": null,
+        "last_trade_ts": null,
+        "ltq": null,
+        "bid_qty": null,
+        "ask_qty": null,
+        "received_ts": "2026-10-29T10:46:38.538+05:30"
+      }
+    }
+  ],
+  "gamma": {
+    "service": "gamma_weekly_simulator",
+    "expiries": [
+      "2026-11-03",
+      "2026-11-09",
+      "2026-11-17",
+      "2026-11-23",
+      "2026-12-01",
+      "2026-12-29",
+      "2027-01-25",
+      "2027-03-30",
+      "2027-06-29",
+      "2027-09-28",
+      "2027-12-28",
+      "2028-06-27",
+      "2028-12-26",
+      "2029-06-26",
+      "2029-12-24",
+      "2030-06-25",
+      "2030-12-31",
+      "2031-06-24"
+    ],
+    "errors": [],
+    "last_error": null,
+    "feed_freshness": {
+      "2026-11-03": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.003,
+        "last_quote_received": "2026-10-29T10:46:39.108934+05:30"
+      },
+      "2026-11-09": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.024,
+        "last_quote_received": "2026-10-29T10:46:39.087355+05:30"
+      },
+      "2026-11-17": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.021,
+        "last_quote_received": "2026-10-29T10:46:39.090756+05:30"
+      },
+      "2026-11-23": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.031,
+        "last_quote_received": "2026-10-29T10:46:39.080671+05:30"
+      },
+      "2026-12-01": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.023,
+        "last_quote_received": "2026-10-29T10:46:39.088520+05:30"
+      },
+      "2026-12-29": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.025,
+        "last_quote_received": "2026-10-29T10:46:39.086604+05:30"
+      },
+      "2027-01-25": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.016,
+        "last_quote_received": "2026-10-29T10:46:39.095606+05:30"
+      },
+      "2027-03-30": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.01,
+        "last_quote_received": "2026-10-29T10:46:39.102074+05:30"
+      },
+      "2027-06-29": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.022,
+        "last_quote_received": "2026-10-29T10:46:39.089651+05:30"
+      },
+      "2027-09-28": {
+        "status": "WAITING_QUOTES",
+        "quote_age_seconds": null,
+        "last_quote_received": null
+      },
+      "2027-12-28": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.035,
+        "last_quote_received": "2026-10-29T10:46:39.076702+05:30"
+      },
+      "2028-06-27": {
+        "status": "WAITING_QUOTES",
+        "quote_age_seconds": null,
+        "last_quote_received": null
+      },
+      "2028-12-26": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.238,
+        "last_quote_received": "2026-10-29T10:46:38.873765+05:30"
+      },
+      "2029-06-26": {
+        "status": "WAITING_QUOTES",
+        "quote_age_seconds": null,
+        "last_quote_received": null
+      },
+      "2029-12-24": {
+        "status": "FRESH",
+        "quote_age_seconds": 0.558,
+        "last_quote_received": "2026-10-29T10:46:38.553349+05:30"
+      },
+      "2030-06-25": {
+        "status": "WAITING_QUOTES",
+        "quote_age_seconds": null,
+        "last_quote_received": null
+      },
+      "2030-12-31": {
+        "status": "WAITING_QUOTES",
+        "quote_age_seconds": null,
+        "last_quote_received": null
+      },
+      "2031-06-24": {
+        "status": "WAITING_QUOTES",
+        "quote_age_seconds": null,
+        "last_quote_received": null
+      }
+    },
+    "daily_reference_availability": {
+      "2026-11-03": false,
+      "2026-11-09": false,
+      "2026-11-17": false,
+      "2026-11-23": false,
+      "2026-12-01": false,
+      "2026-12-29": false,
+      "2027-01-25": false,
+      "2027-03-30": false,
+      "2027-06-29": false,
+      "2027-09-28": false,
+      "2027-12-28": false,
+      "2028-06-27": false,
+      "2028-12-26": false,
+      "2029-06-26": false,
+      "2029-12-24": false,
+      "2030-06-25": false,
+      "2030-12-31": false,
+      "2031-06-24": false
+    },
+    "model_sha256": "b699ff897305ccffe9003701512a75dc8130cbe680d40a7ddf431fae576693eb",
+    "reference_fingerprint": "774a90cdbea20f94d87b2a30ae8a657595b2cc944a5e7af6c3222fa40f01fb76",
+    "expiry_classification": "explicit_allowlist"
+  },
+  "indices": {
+    "type": "indices",
+    "snapshot": true,
+    "request_id": "648962d26db44f96b741ce790ac5ca17",
+    "ts": "2026-10-29T10:46:39.118+05:30",
+    "data": [
+      {
+        "exchange": "BSE",
+        "symbol": "SENSEX",
+        "index_code": 1,
+        "ltp": 73800.98,
+        "received_ts": "2026-10-29T10:46:38.744+05:30",
+        "exchange_ts": null
+      }
+    ]
+  },
+  "bod": {
+    "checked_at": "2026-10-29T10:45:01.028485+05:30",
+    "state": "READY",
+    "schedule": "Weekdays 08:45 IST; five-minute retries and health checks",
+    "trade_date": "2026-10-29",
+    "receipt": "/home/administrator/projects/nse-fo-low-latency-decoder/data/bod/receipts/2026-10-29.json",
+    "expiries": [
+      "2026-11-03",
+      "2026-11-09",
+      "2026-11-17",
+      "2026-11-23",
+      "2026-12-01",
+      "2026-12-29",
+      "2027-01-25",
+      "2027-03-30",
+      "2027-06-29",
+      "2027-09-28",
+      "2027-12-28",
+      "2028-06-27",
+      "2028-12-26",
+      "2029-06-26",
+      "2029-12-24",
+      "2030-06-25",
+      "2030-12-31",
+      "2031-06-24"
+    ],
+    "references_deferred_to_next_bod": true
+  },
+  "indicative": {
+    "ok": true
+  },
+  "logs": "logs/system-20261029-104613-425904",
+  "bse_rejects": 0,
+  "joins": [
+    "Multicast JOIN SUCCESS: group=233.1.2.5 port=34330 interface=0.0.0.0",
+    "Multicast JOIN SUCCESS: group=233.1.2.4 port=2004 interface=0.0.0.0",
+    "Multicast JOIN SUCCESS: group=233.1.2.3 port=2003 interface=0.0.0.0"
+  ],
+  "capabilities": {
+    "quotes": true,
+    "subscriptions": true,
+    "snapshots": true,
+    "instrument_master": true,
+    "heartbeat": true,
+    "bar_1m": false,
+    "eod": false,
+    "reference_daily": false,
+    "exchange_ts": false,
+    "last_trade_ts": false,
+    "volume": true,
+    "volume_exchanges": [
+      "BSE"
+    ],
+    "underlying_indices": true,
+    "complex_instruments": false,
+    "lot_size": false,
+    "tick_size": false,
+    "bse_oi": false,
+    "reason": "Only fields decoded by this repository are supplied; no external sources."
+  },
+  "scheduled_task": {
+    "name": "NSE-KE2-Daily-BOD",
+    "start_boundary": "2026-10-29T08:45:00+05:30",
+    "repeat": "PT5M",
+    "unattended_last_result": 0,
+    "windows_login_required": true
+  }
+}

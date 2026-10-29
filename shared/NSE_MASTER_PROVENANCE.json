@@ -1,5 +1,5 @@
 {
-  "instruments": 84823,
+  "instruments": 80093,
   "near_term_nifty_expiries": [
     "2026-11-03",
     "2026-11-09",
@@ -7,12 +7,12 @@
     "2026-11-23",
     "2026-12-01"
   ],
-  "sha256": "79da003ae5a141a33a6d32f60e62024c28e786d35ca4c70c5929dec620be2c22",
+  "sha256": "12796d026b72239ae5984859b01e394d37fdb8744f163af365b272e379781578",
   "excluded_rows": [],
-  "source": "/home/administrator/projects/nse-fo-low-latency-decoder/data/reference_import/GreekTokens.csv",
-  "checked_at": "2026-10-28T10:51:05.709033+05:30",
+  "source": "/home/administrator/projects/nse-fo-low-latency-decoder/data/bod/snapshots/20261029-101947/data/reference_import/GreekTokens.csv",
+  "checked_at": "2026-10-29T10:20:14.150245+05:30",
   "bse": {
-    "source": "/home/administrator/projects/nse-fo-low-latency-decoder/data/reference_import/BSEIndexTokens.csv",
+    "source": "/home/administrator/projects/nse-fo-low-latency-decoder/data/bod/snapshots/20261029-101947/data/reference_import/BSEIndexTokens.csv",
     "instruments": 5940,
     "sensex_future_expiries": [
       "2026-10-29",
@@ -21,8 +21,11 @@
     ],
     "sha256": "c9728822e7a938bce38456daa4cf597ad89e3bf1fc276f72d1292ed5cc878881"
   },
-  "changed_files": [],
-  "restart_required": false,
+  "changed_files": [
+    "GreekTokens.csv"
+  ],
+  "previous_master_backup": "/home/administrator/projects/nse-fo-low-latency-decoder/backups/master_refresh/20261029-102014-271453",
+  "restart_required": true,
   "consumers": [
     "decoder",
     "KE2 adapter",

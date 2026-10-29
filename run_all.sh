@@ -2,6 +2,9 @@
 # Complete stack: verified restart, Gamma simulator, indicative, API and LAN.
 set -Eeuo pipefail
 PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$PROJECT_ROOT/data/bod/installed.json" && $# -eq 0 ]]; then
+    exec "$PROJECT_ROOT/venv/bin/python" -u "$PROJECT_ROOT/scripts/bod_manager.py" --start
+fi
 if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
     printf 'Usage: bash run_all.sh [--check] [--refresh-inputs] [--no-refresh-masters]
 '

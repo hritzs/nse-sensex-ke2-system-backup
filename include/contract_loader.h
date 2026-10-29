@@ -8,7 +8,7 @@
 
 #include "option_types.h"
 
-enum class Exchange { NSE, BSE };
+enum class Exchange { NSE, BSE, BSE_EQ };
 
 struct Contract {
     uint32_t xxToken;

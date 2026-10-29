@@ -94,6 +94,15 @@ class APITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post("/sessions",json={"expiry":"bad","underlyings":[]})).status_code,422)
         self.assertEqual((await self.client.post("/sessions/no-such-id/snapshot")).status_code,404)
 
+    async def test_real_index_snapshot_and_bod_status_routes(self):
+        self.fixture.feed.ingest({"type":"market_index","exchange":"BSE",
+            "index_code":1,"symbol":"SENSEX","ltp":80000.25,"received_ms":1792030000000})
+        result=await self.client.get("/indices",params={"symbol":"SENSEX"})
+        self.assertEqual(result.status_code,200,result.text)
+        self.assertEqual(result.json()["data"][0]["ltp"],80000.25)
+        self.assertEqual(result.json()["data"][0]["symbol"],"SENSEX")
+        self.assertEqual((await self.client.get("/bod/status")).status_code,200)
+
     async def test_unreachable_upstream_is_not_healthy_feed(self):
         with socket.socket() as sock:
             sock.bind(("127.0.0.1",0))

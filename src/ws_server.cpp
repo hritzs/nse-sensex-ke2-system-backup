@@ -369,9 +369,9 @@ void start_ws_server(int port)
     std::thread([]() {
         std::this_thread::sleep_for(std::chrono::seconds(2)); // Allow WSL network mounts to wake up
 
-        std::string nse_file = scan_dir("/home/administrator/nse_v2_microservices/data/BhavCopy", "fo");
+        std::string nse_file = (std::getenv("NSE_BHAVCOPY_FILE") ? std::string(std::getenv("NSE_BHAVCOPY_FILE")) : scan_dir("/home/administrator/nse_v2_microservices/data/BhavCopy", "fo"));
 
-        std::string bse_file = scan_dir("/home/administrator/nse_v2_microservices/data/BhavCopy/BSEfobhavcopy", "BSEfo");
+        std::string bse_file = (std::getenv("BSE_BHAVCOPY_FILE") ? std::string(std::getenv("BSE_BHAVCOPY_FILE")) : scan_dir("/home/administrator/nse_v2_microservices/data/BhavCopy/BSEfobhavcopy", "BSEfo"));
 
         auto load_csv = [](const std::string& path, const std::string& label) {
             if (path.empty()) return false;
@@ -816,7 +816,7 @@ void start_ws_server(int port)
                 filepath = "/home/administrator/nse_v2_microservices/data/BhavCopy/" + decoded;
             }
             } else {
-                filepath = scan_dir("/home/administrator/nse_v2_microservices/data/BhavCopy", "fo");
+                filepath = (std::getenv("NSE_BHAVCOPY_FILE") ? std::string(std::getenv("NSE_BHAVCOPY_FILE")) : scan_dir("/home/administrator/nse_v2_microservices/data/BhavCopy", "fo"));
             }
 
         if (filepath.empty()) {

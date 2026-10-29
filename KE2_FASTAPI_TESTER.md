@@ -1,3 +1,5 @@
+> Deployment update, 29 October 2026: see [daily BOD, corrected BSE feed and all listed expiries](BOD_AND_SENSEX.md). Earlier deployment/capability statements below are historical.
+
 # FastAPI / Swagger tester for KE2
 
 This is an HTTP test client in front of the existing KE2 WebSocket. It does

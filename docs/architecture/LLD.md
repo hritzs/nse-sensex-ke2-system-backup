@@ -1,3 +1,5 @@
+> Deployment update, 29 October 2026: see [daily BOD, corrected BSE feed and all listed expiries](../../BOD_AND_SENSEX.md). Earlier deployment/capability statements below are historical.
+
 # Low-level design: implemented system
 
 Updated: 19 October 2026. This document is tied to the hashes in the versioned
@@ -800,3 +802,18 @@ refresh excludes model references and LUTs. --check is read-only and
 --no-refresh-masters permits deliberate offline startup. Consumers retain
 immutable startup maps until the coordinated restart; no runtime C++ map
 replacement is attempted. See docs/verification/EXPIRY_REFRESH_20261028.md.
+
+## Daily BOD implementation
+
+bod_manager.py locks manager.lock, stages checksummed PowerShell copies,
+validates master dates and references, preserves activity-bound fingerprints,
+stops verified project services, publishes snapshots/masters and checks Gamma
+expiry health before writing the receipt. managed_stack.py rejects old-day
+snapshots and derives GS_WEEKLY_EXPIRIES from actual unexpired NIFTY options.
+No Gamma calculation function changes are required.
+
+NFCAST 2020 escapes use eight bytes for 64-bit quantities and four for prices.
+Nine post-WAP fields precede depth; side indicators are raw shorts. Entire
+packets parse before publishing. EQ 2011/2012 produces market_index with
+real exchange identity/value/local receipt; FastAPI /indices exposes snapshots.
+Explicit-strike subscriptions validate listed strikes before replacing state.

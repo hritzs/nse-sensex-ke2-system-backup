@@ -26,7 +26,9 @@ CAPABILITIES = {
     "quotes": True, "subscriptions": True, "snapshots": True,
     "instrument_master": True, "heartbeat": True,
     "bar_1m": False, "eod": False, "reference_daily": False,
-    "exchange_ts": False, "last_trade_ts": False, "volume": False,
+    "exchange_ts": False, "last_trade_ts": False, "volume": True,
+    "volume_exchanges": ["BSE"], "underlying_indices": True,
+    "complex_instruments": False,
     "lot_size": False, "tick_size": False, "bse_oi": False,
     "reason": "Only fields decoded by this repository are supplied; no external sources.",
 }
@@ -130,6 +132,7 @@ class Feed:
     def __init__(self, master, stale_seconds=10):
         self.master = master
         self.quotes = {}
+        self.indices = {}
         self.sessions = {}
         self.source_connected = False
         self.last_by_exchange = {}
@@ -142,7 +145,9 @@ class Feed:
     def snapshot(self, subscription):
         return {"type": "quote", "snapshot": True, "exchange_ts": None,
                 "ts": iso_ms(), "data": [self.quote(i) for i in sorted(subscription.instruments)],
-                "unavailable_fields": ["exchange_ts", "last_trade_ts", "volume"]}
+                "unavailable_fields": ["exchange_ts", "last_trade_ts"] +
+                    (["volume"] if all(self.master.by_id[i].exchange != "BSE"
+                                      for i in subscription.instruments) else [])}
 
     def resolve(self, subscription):
         selected = set()
@@ -155,12 +160,14 @@ class Feed:
             if rule["future"]:
                 selected.update(i.instrument_id for i in futures)
             options = rule["options"]
-            if not futures and (rule["future"] or options):
+            if not futures and (rule["future"] or (options and options["mode"] == "around_future")):
                 pending.append({"symbol": symbol, "expiry": expiry, "reason": "future_contract_unavailable"})
             types = options["types"] if options else []
             strikes = {i.strike for i in group if i.option_type in types}
             chosen = set(rule["extra_strikes"])
-            if options:
+            if options and options["mode"] == "explicit_strikes":
+                chosen.update(options["strikes"])
+            if options and options["mode"] == "around_future":
                 # Center only on an observed exact-expiry future; do not invent one.
                 anchor = next((self.quotes.get(i.instrument_id, {}).get("ltp") for i in futures
                                if finite_number(self.quotes.get(i.instrument_id, {}).get("ltp"))
@@ -199,12 +206,17 @@ class Feed:
                 raise ValueError(f"Expected segment {expected} for {symbol}")
             options = value.get("options")
             if options is not None:
-                if not isinstance(options, dict) or options.get("mode") != "around_future":
-                    raise ValueError("Only options.mode=around_future is supported")
+                if not isinstance(options, dict) or options.get("mode") not in ("around_future","explicit_strikes"):
+                    raise ValueError("options.mode must be around_future or explicit_strikes")
                 count = options.get("strikes_each_side")
                 types = options.get("types")
-                if type(count) is not int or not 0 <= count <= 1000:
+                if options["mode"] == "around_future" and (type(count) is not int or not 0 <= count <= 1000):
                     raise ValueError("strikes_each_side must be 0..1000")
+                if options["mode"] == "explicit_strikes":
+                    requested = options.get("strikes")
+                    if not isinstance(requested,list) or not requested or len(requested)>2000 or any(
+                            not finite_number(k) or k<0 for k in requested):
+                        raise ValueError("explicit_strikes requires 1..2000 listed strikes")
                 if not isinstance(types, list) or not types or any(t not in ("CE", "PE") for t in types):
                     raise ValueError("types must contain CE and/or PE")
                 if "step" in options and (not finite_number(options["step"]) or options["step"] <= 0):
@@ -217,6 +229,9 @@ class Feed:
             if type(value.get("future", False)) is not bool:
                 raise ValueError("future must be boolean")
             listed = {i.strike for i in group if i.option_type in (options["types"] if options else [])}
+            if options and options["mode"] == "explicit_strikes" and any(
+                    k not in listed for k in options["strikes"]):
+                raise ValueError("Explicit strike is not listed for this expiry")
             if any(k not in listed for k in extra):
                 raise ValueError(f"extra_strikes contains unlisted contracts for {symbol}/{expiry}")
             rules.append({"expiry": expiry, "symbol": symbol, "future": value.get("future", False),
@@ -227,6 +242,16 @@ class Feed:
         self.resolve(subscription)
 
     def ingest(self, event):
+        if event.get("type") == "market_index":
+            symbol = event.get("symbol")
+            value, stamp = event.get("ltp"), event.get("received_ms")
+            if (event.get("exchange") == "BSE" and isinstance(symbol, str)
+                    and symbol and finite_number(value) and value > 0
+                    and finite_number(stamp) and type(event.get("index_code")) is int):
+                self.indices[symbol] = {"exchange": "BSE", "symbol": symbol,
+                    "index_code": event["index_code"], "ltp": value,
+                    "received_ts": iso_ms(stamp), "exchange_ts": None}
+            return
         if event.get("type") not in ("market_quote", "market_oi"):
             return
         instrument = self.master.by_key.get((event.get("exchange"), event.get("token")))
@@ -238,11 +263,11 @@ class Feed:
         iid = instrument.instrument_id
         quote = self.quotes.setdefault(iid, {})
         if event["type"] == "market_quote":
-            for key in ("ltp", "bid", "ask", "ltq", "bid_qty", "ask_qty"):
+            for key in ("ltp", "bid", "ask", "ltq", "bid_qty", "ask_qty", "volume"):
                 value = event.get(key)
                 if value is not None and (not finite_number(value) or value < 0):
                     return
-            quote.update({k: event.get(k) for k in ("ltp", "bid", "ask", "ltq", "bid_qty", "ask_qty")})
+            quote.update({k: event.get(k) for k in ("ltp", "bid", "ask", "ltq", "bid_qty", "ask_qty", "volume")})
             quote["received_ts"] = iso_ms(received)
             quote["_quote_rx"] = time.monotonic()
         elif type(event.get("oi")) is int and event["oi"] >= 0:
@@ -285,6 +310,7 @@ class Feed:
             try:
                 async with websockets.connect(uri, max_size=4 * 1024 * 1024) as ws:
                     self.quotes.clear()
+                    self.indices.clear()
                     self.last_by_exchange.clear()
                     self.source_connected = True
                     for sub in self.sessions.values():
@@ -315,8 +341,16 @@ class Feed:
             await asyncio.wait_for(ws.send(json.dumps(payload, allow_nan=False)), timeout=5)
         async def updates():
             last_heartbeat = 0.0
+            last_indices = {}
             while True:
                 await asyncio.sleep(1)
+                watched = {rule["symbol"] for rule in sub.rules}
+                index_rows = [row for symbol, row in self.indices.items()
+                              if symbol in watched and row != last_indices.get(symbol)]
+                if index_rows:
+                    await send({"type": "indices", "snapshot": False, "ts": iso_ms(),
+                                "data": index_rows})
+                    last_indices.update({row["symbol"]: row.copy() for row in index_rows})
                 dirty = sorted(sub.dirty & sub.instruments)
                 sub.dirty.clear()
                 if dirty:
@@ -375,6 +409,16 @@ class Feed:
                         for offset in range(0, max(1, len(data)), 500):
                             await send({"type": "instrument_master", "request_id": request.get("request_id"),
                                         "data": data[offset:offset+500], "more": offset+500 < len(data)})
+                    elif typ == "indices":
+                        symbols = request.get("symbols")
+                        if symbols is not None and (not isinstance(symbols, list)
+                                or any(not isinstance(s, str) for s in symbols)):
+                            raise ValueError("symbols must be a list of index symbols")
+                        wanted = None if symbols is None else {s.upper() for s in symbols}
+                        await send({"type": "indices", "snapshot": True,
+                                    "request_id": request.get("request_id"), "ts": iso_ms(),
+                                    "data": [row for symbol,row in sorted(self.indices.items())
+                                             if wanted is None or symbol in wanted]})
                     elif typ == "snapshot":
                         await send(self.snapshot(sub))
                     else:

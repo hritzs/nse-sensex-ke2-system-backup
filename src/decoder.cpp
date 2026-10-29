@@ -138,11 +138,14 @@ public:
         else throw std::out_of_range("BSE skip");
     }
 
-    int64_t read_compressed(int64_t base) {
+    int64_t read_compressed(int64_t base, bool wide_quantity = false) {
         if (pos + 2 > len) throw std::out_of_range("BSE compressed");
         int16_t diff = read_s16();
         if (diff == 32767) {
-            return read_u32(); // Fallback to 4 bytes if 32767 escape is hit
+            if (!wide_quantity) return read_u32();
+            const uint64_t value = read_u64();
+            if (value > INT64_MAX) throw std::out_of_range("BSE wide quantity");
+            return static_cast<int64_t>(value);
         }
         return base + diff;
     }
@@ -205,10 +208,12 @@ void parse_bse_nfcast(const uint8_t* buf, size_t len) {
     if (msg_type == 2011 || msg_type == 2012) {
         p.skip(22);
         uint16_t num_records = p.read_u16();
+        if (num_records > 24 || len < 28 + size_t(num_records) * 40)
+            throw std::out_of_range("BSE index record count");
         for (int i = 0; i < num_records; i++) {
             if (p.eof()) break;
             
-            p.skip(4); // Index Code
+            const uint32_t index_code = p.read_u32(); // Exchange index identity
             p.skip(16); // High, Low, Open, PrevClose
             int32_t index_val_raw = p.read_u32();
             double index_value = index_val_raw / 100.0;
@@ -219,97 +224,86 @@ void parse_bse_nfcast(const uint8_t* buf, size_t len) {
             
             std::string symbol(index_id);
             symbol.erase(std::find(symbol.begin(), symbol.end(), '\0'), symbol.end());
+            while (!symbol.empty() && symbol.back() == ' ') symbol.pop_back();
             
             // Inject spot price into the analytics engine!
             if (!symbol.empty() && index_value > 0) {
+                publish_market_index(index_code, symbol, index_value);
                 Analytics::update_underlying(symbol, index_value);
             }
         }
         return;
     }
 
-    if (msg_type != 2020 && msg_type != 2021) return;
+    // Complex/spread instruments have extended identifiers and may carry
+    // negative spread prices. They are absent from our outright contract
+    // master and must never be interpreted as an outright SENSEX token.
+    if (msg_type == 2021) return;
+    if (msg_type != 2020) return;
 
     p.skip(22); // Skip Res1(4), Res2(4), Res3(2), Time(8), Res4(2), Res5(2)
     uint16_t num_records = p.read_u16();
 
+    if (num_records == 0 || num_records > 6) throw std::out_of_range("BSE record count");
+    struct Decoded {
+        uint32_t token; double ltp, best_bid, best_ask;
+        uint64_t ltq, volume;
+        std::optional<uint64_t> bid_qty, ask_qty;
+    };
+    std::vector<Decoded> decoded;
     for (int i = 0; i < num_records; i++) {
-        if (p.eof()) break;
-
-        uint32_t token = 0;
-        if (msg_type == 2020) {
-            token = p.read_u32();
-        } else {
-            const uint64_t extended_token = p.read_u64();
-            if (extended_token > UINT32_MAX) return; // Never alias a complex token.
-            token = static_cast<uint32_t>(extended_token);
-        }
-
-        // Skip: Trades(4), Vol(8), Val(8), Flags(4), MktType(2), Sess(2), LTPTime(6), Res9(2), Res10(2), Res11(8)
-        p.skip(46);
-
+        uint64_t token = msg_type == 2020 ? p.read_u32() : p.read_u64();
+        p.skip(4); // no. of trades
+        uint64_t volume = p.read_u64();
+        p.skip(34); // value, flags, market/session, last-trade time, reserved
         uint16_t num_price_points = p.read_u16();
-        p.skip(12); // Skip Timestamp(8), CloseRate(4)
-
-        int64_t ltq = p.read_u64();
-        int32_t ltp_raw = p.read_u32();
-        double ltp = ltp_raw / 100.0; // BSE prices have 2 decimal precision
-
-        // Parse 12 compressed stats fields using LTQ & LTP bases
-        for (int k = 0; k < 12; k++) {
-            // Indices 6, 7, 8 are Quantity fields (Ind Eq Qty, Tot Bid Qty, Tot Offer Qty)
-            p.read_compressed(k >= 6 && k <= 8 ? ltq : ltp_raw);
+        if (num_price_points > 5) throw std::out_of_range("BSE depth count");
+        p.skip(12); // Julian timestamp, close
+        uint64_t ltq = p.read_u64();
+        if (ltq > INT64_MAX) throw std::out_of_range("BSE quantity");
+        int64_t ltp_raw = p.read_u32();
+        for (int k = 0; k < 12; k++)
+            p.read_compressed(k >= 6 && k <= 8 ? static_cast<int64_t>(ltq) : ltp_raw,
+                              k >= 6 && k <= 8);
+        // NFCAST 6.1/6.2/6.3: nine fields after WAP, before depth.
+        // Side indicators are raw shorts, never compression escape markers.
+        p.read_compressed(ltp_raw);                 // closing reference
+        p.read_compressed(ltq, true); p.read_u16();        // imbalance quantity / side
+        p.read_compressed(ltq, true); p.read_u16();        // market-order imbalance / side
+        p.read_compressed(ltq, true); p.read_compressed(ltp_raw);
+        p.read_compressed(ltq, true); p.read_compressed(ltp_raw);
+        double best_bid = 0, best_ask = 0;
+        std::optional<uint64_t> bid_qty, ask_qty;
+        for (int side = 0; side < 2; ++side) {
+            int64_t bases[5] = {ltp_raw,static_cast<int64_t>(ltq),static_cast<int64_t>(ltq),
+                               static_cast<int64_t>(ltq),static_cast<int64_t>(ltq)};
+            for (unsigned level = 0; level < num_price_points; ++level) {
+                int16_t diff = p.read_s16();
+                if (diff == (side == 0 ? 32766 : -32766)) break;
+                int64_t values[5];
+                values[0] = diff == 32767 ? p.read_u32() : bases[0] + diff;
+                for (int field = 1; field < 5; ++field)
+                    values[field] = p.read_compressed(bases[field], field == 1 || field == 3);
+                if (values[0] < 0 || values[1] < 0)
+                    throw std::out_of_range("BSE negative depth");
+                if (level == 0) {
+                    if (side == 0) {best_bid=values[0]/100.0;bid_qty=values[1];}
+                    else {best_ask=values[0]/100.0;ask_qty=values[1];}
+                }
+                std::copy(values,values+5,bases);
+            }
         }
-
-        double best_bid = 0.0;
-        int32_t bid_price_base = ltp_raw;
-        int64_t bid_qty_base = ltq;
-
-        // ----------------------------------
-        // DECOMPRESS BEST BIDS
-        // ----------------------------------
-        for (int lvl = 0; lvl < num_price_points; lvl++) {
-            int16_t diff = p.read_s16();
-            if (diff == 32766) break; // 32766 terminates Best Bid loop
-
-            int32_t price_raw = (diff == 32767) ? p.read_u32() : (bid_price_base + diff);
-            if (lvl == 0) best_bid = price_raw / 100.0;
-
-            int64_t qty = p.read_compressed(bid_qty_base);
-            p.read_compressed(bid_qty_base); // Num Orders
-            p.read_compressed(bid_qty_base); // Implied Buy Qty
-            p.read_compressed(bid_qty_base); // Reserved
-
-            bid_price_base = price_raw;
-            bid_qty_base = qty;
-        }
-
-        double best_ask = 0.0;
-        int32_t ask_price_base = ltp_raw;
-        int64_t ask_qty_base = ltq;
-
-        // ----------------------------------
-        // DECOMPRESS BEST OFFERS
-        // ----------------------------------
-        for (int lvl = 0; lvl < num_price_points; lvl++) {
-            int16_t diff = p.read_s16();
-            if (diff == -32766) break; // -32766 terminates Best Offer loop
-
-            int32_t price_raw = (diff == 32767) ? p.read_u32() : (ask_price_base + diff);
-            if (lvl == 0) best_ask = price_raw / 100.0;
-
-            int64_t qty = p.read_compressed(ask_qty_base);
-            p.read_compressed(ask_qty_base); // Num Orders
-            p.read_compressed(ask_qty_base); // Implied Sell Qty
-            p.read_compressed(ask_qty_base); // Reserved
-
-            ask_price_base = price_raw;
-            ask_qty_base = qty;
-        }
-
+        if (token <= UINT32_MAX)
+            decoded.push_back({static_cast<uint32_t>(token),ltp_raw/100.0,best_bid,best_ask,
+                               ltq,volume,bid_qty,ask_qty});
+    }
+    for (const auto& record : decoded) {
+        const auto token=record.token;
+        const auto ltp=record.ltp, best_bid=record.best_bid, best_ask=record.best_ask;
         // Publish raw SENSEX/BSE quotes even before analytics is ready.
         if (BSE_TOKEN_MAP.find(token) != BSE_TOKEN_MAP.end())
-            publish_market_quote(Exchange::BSE, token, ltp, best_bid, best_ask);
+            publish_market_quote(Exchange::BSE, token, ltp, best_bid, best_ask,
+                                 record.ltq, record.bid_qty, record.ask_qty, record.volume);
 
         // ----------------------------------
         // PUSH TO ANALYTICS
@@ -591,13 +585,27 @@ void process_packet(Exchange exchange, const uint8_t* buf, size_t len)
 {
     total_packets++;
 
-    if (exchange == Exchange::BSE) {
+    if (exchange == Exchange::BSE_EQ) {
+        // EQ tokens have a different namespace. Only the documented index
+        // messages are consumed until an authoritative cash master is wired.
+        if (len < 4 || (be32(buf) != 2011 && be32(buf) != 2012)) {
+            print_stats();
+            return;
+        }
+    }
+    if (exchange == Exchange::BSE || exchange == Exchange::BSE_EQ) {
         // BSE Direct NFCAST does not use the same LZO chunking layer as NSE
         try {
             parse_bse_nfcast(buf, len);
             parsed_packets++;
-        } catch (const std::out_of_range&) {
+        } catch (const std::out_of_range& error) {
             dropped_packets++;
+            static std::atomic<unsigned> reports{0};
+            if (reports.fetch_add(1) < 5) {
+                std::lock_guard<std::mutex> lock(FEED_LOG_MUTEX);
+                std::cout << "[BSE REJECT] type=" << (len>=4 ? be32(buf):0)
+                          << " bytes=" << len << " reason=" << error.what() << std::endl;
+            }
         }
         print_stats();
         return;

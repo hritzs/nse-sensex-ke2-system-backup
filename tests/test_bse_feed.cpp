@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <vector>
 #include <lzo/lzo1z.h>
+#include <fstream>
+#include <sstream>
 std::unordered_map<uint32_t,std::pair<std::string,Exchange>> TOKEN_MAP, BSE_TOKEN_MAP;
 static std::vector<std::string> events, legacy, seen;
 bool market_source_active() { return true; }
@@ -26,14 +28,47 @@ static std::vector<uint8_t> bse() {
  u32(p,860819);p.resize(p.size()+46);u16(p,1);p.resize(p.size()+12);
  u32(p,0);u32(p,10);u32(p,10000);
  for(int i=0;i<12;++i) u16(p,0);
+ for(int i=0;i<9;++i)u16(p,0); // NFCAST 6.3 auction/reserved fields
  u16(p,static_cast<uint16_t>(-5));for(int i=0;i<4;++i)u16(p,0);
  u16(p,5);for(int i=0;i<4;++i)u16(p,0);
  return p;
 }
-int main() {
+int main(int argc, char** argv) {
+ if (argc==3) {
+   std::ifstream master(argv[1]); std::string line; std::getline(master,line);
+   while(std::getline(master,line)) {
+     std::istringstream row(line);std::string token;std::getline(row,token,',');
+     try { BSE_TOKEN_MAP[std::stoul(token)]={"SENSEX|29-OCT-26|0|FUT",Exchange::BSE}; }
+     catch(...) {}
+   }
+   std::ifstream input(argv[2],std::ios::binary);assert(input);
+   unsigned packets=0,rows=0,two_sided=0,missing=0;
+   char prefix[4];
+   while(input.read(prefix,4)) {
+     uint32_t size=(uint8_t(prefix[0])<<24)|(uint8_t(prefix[1])<<16)|
+                   (uint8_t(prefix[2])<<8)|uint8_t(prefix[3]);
+     assert(size<=65536);std::vector<uint8_t> data(size);
+     assert(input.read(reinterpret_cast<char*>(data.data()),size));
+     events.clear();process_packet(Exchange::BSE,data.data(),data.size());++packets;
+     for(const auto& event:events) {
+       if(event.find("market_quote")==std::string::npos)continue;
+       ++rows;
+       if(event.find("\"bid\":null")==std::string::npos &&
+          event.find("\"ask\":null")==std::string::npos)++two_sided;
+       else ++missing;
+     }
+   }
+   std::cout<<"BSE_CAPTURE packets="<<packets<<" quote_rows="<<rows
+            <<" two_sided="<<two_sided<<" missing_book="<<missing<<"\n";
+   assert(packets>0 && rows>0 && two_sided>0);
+   return 0;
+ }
+
  TOKEN_MAP[860819]={"NIFTY|27-OCT-26|100|CE",Exchange::NSE};
  BSE_TOKEN_MAP[860819]={"SENSEX|27-OCT-26|0|FUT",Exchange::BSE};
  auto packet=bse();
+ process_packet(Exchange::BSE_EQ,packet.data(),packet.size());
+ assert(events.empty()); // EQ cash IDs must never alias FO IDs.
  process_packet(Exchange::BSE,packet.data(),packet.size());
  assert(events.size()==1);
  assert(events[0].find("\"exchange\":\"BSE\"")!=std::string::npos);
@@ -45,14 +80,51 @@ int main() {
  events.clear();seen.clear();legacy.clear();
  for(size_t n=0;n<packet.size();++n) process_packet(Exchange::BSE,packet.data(),n);
  assert(events.empty() && seen.empty() && legacy.empty());
- // 2021 extended tokens are not silently truncated to a different instrument.
+ // Complex 2021 records are unsupported, including IDs fitting in 32 bits.
  auto extended=packet;extended[3]=0xe5;
  extended.insert(extended.begin()+28,4,0);
  process_packet(Exchange::BSE,extended.data(),extended.size());
- assert(events.size()==1);
+ assert(events.empty() && seen.empty() && legacy.empty());
  events.clear();seen.clear();legacy.clear();
  extended[28]=1;
  process_packet(Exchange::BSE,extended.data(),extended.size());
+ assert(events.empty());
+
+ // A truncated second BSE record must not publish even the first record.
+ auto multi=packet;multi[27]=2;
+ multi.insert(multi.end(),packet.begin()+28,packet.end());
+ process_packet(Exchange::BSE,multi.data(),multi.size());
+ assert(events.size()==2);
+ events.clear();seen.clear();legacy.clear();
+ multi.pop_back();process_packet(Exchange::BSE,multi.data(),multi.size());
+ assert(events.empty() && seen.empty() && legacy.empty());
+ // Escaped Long Long quantities occupy eight bytes, unlike price/order escapes.
+ auto wide=packet;wide.resize(wide.size()-20);
+ u16(wide,static_cast<uint16_t>(-5));
+ u16(wide,32767);u32(wide,1);u32(wide,10); // 2^32+10 actual bid quantity
+ u16(wide,0);u16(wide,32767);u32(wide,0);u32(wide,0);u16(wide,0);
+ u16(wide,5);for(int i=0;i<4;++i)u16(wide,0);
+ process_packet(Exchange::BSE,wide.data(),wide.size());
+ assert(events.size()==1 && events[0].find("\"bid_qty\":4294967306")!=std::string::npos);
+ events.clear();seen.clear();legacy.clear();
+
+ // Explicit end-of-book markers produce missing books, never invented prices.
+ auto sparse=packet;sparse.resize(sparse.size()-20);
+ u16(sparse,32766);u16(sparse,static_cast<uint16_t>(-32766));
+ process_packet(Exchange::BSE,sparse.data(),sparse.size());
+ assert(events.size()==1 && events[0].find("\"bid\":null")!=std::string::npos);
+ assert(events[0].find("\"ask\":null")!=std::string::npos);
+ assert(events[0].find("\"volume\":0")!=std::string::npos);
+ events.clear();seen.clear();legacy.clear();
+ // Real exchange index identity travels independently of F&O instrument IDs.
+ std::vector<uint8_t> index;u32(index,2011);index.resize(26);u16(index,1);
+ u32(index,1);index.resize(index.size()+16);u32(index,7400000);
+ for(char c:std::string("SENSEX"))index.push_back(c);
+ index.push_back(0);index.resize(index.size()+9);
+ process_packet(Exchange::BSE_EQ,index.data(),index.size());
+ assert(events.size()==1 && events[0].find("market_index")!=std::string::npos);
+ assert(events[0].find("\"ltp\":74000")!=std::string::npos);
+ events.clear();index.pop_back();process_packet(Exchange::BSE_EQ,index.data(),index.size());
  assert(events.empty());
 
  // Protocol-defined legacy and enhanced MBP: two records detect stride errors.

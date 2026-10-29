@@ -1,0 +1,78 @@
+[
+  {
+    "command": [
+      "cmake",
+      "--build",
+      "build-ke2",
+      "--target",
+      "test_bse_feed",
+      "-j2"
+    ],
+    "exit_code": 0,
+    "stdout": "[ 20%] Building CXX object CMakeFiles/test_bse_feed.dir/tests/test_bse_feed.cpp.o\n[ 40%] Linking CXX executable test_bse_feed\n[100%] Built target test_bse_feed\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "ctest",
+      "--test-dir",
+      "build-ke2",
+      "--output-on-failure"
+    ],
+    "exit_code": 0,
+    "stdout": "Test project /home/administrator/projects/nse-fo-low-latency-decoder/build-ke2\n    Start 1: bse_feed\n1/1 Test #1: bse_feed .........................   Passed    0.00 sec\n\n100% tests passed, 0 tests failed out of 1\n\nTotal Test time (real) =   0.00 sec\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "venv/bin/python",
+      "-m",
+      "unittest",
+      "-v",
+      "test_ke2_feed",
+      "test_ke2_transport"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "test_bse_volume_quantities_and_index_snapshots (test_ke2_feed.FeedTests.test_bse_volume_quantities_and_index_snapshots) ... ok\ntest_explicit_long_dated_strikes_do_not_require_a_future (test_ke2_feed.FeedTests.test_explicit_long_dated_strikes_do_not_require_a_future) ... ok\ntest_invalid_subscription_is_atomic (test_ke2_feed.FeedTests.test_invalid_subscription_is_atomic) ... ok\ntest_only_matching_future_recenters_subscription (test_ke2_feed.FeedTests.test_only_matching_future_recenters_subscription) ... ok\ntest_pending_future_and_exchange_isolation (test_ke2_feed.FeedTests.test_pending_future_and_exchange_isolation) ... ok\ntest_raw_ltp_and_missing_fields (test_ke2_feed.FeedTests.test_raw_ltp_and_missing_fields) ... ok\ntest_stock_contracts_quotes_and_segment_validation (test_ke2_feed.FeedTests.test_stock_contracts_quotes_and_segment_validation) ... ok\ntest_strike_recenter_and_extra_strikes (test_ke2_feed.FeedTests.test_strike_recenter_and_extra_strikes) ... ok\ntest_websocket_snapshot_unsubscribe_resume_and_unsupported (test_ke2_feed.FeedTests.test_websocket_snapshot_unsubscribe_resume_and_unsupported) ... ok\ntest_bse_volume_quantities_and_index_snapshots (test_ke2_feed.FeedTests.test_bse_volume_quantities_and_index_snapshots) ... ok\ntest_explicit_long_dated_strikes_do_not_require_a_future (test_ke2_feed.FeedTests.test_explicit_long_dated_strikes_do_not_require_a_future) ... ok\ntest_invalid_subscription_is_atomic (test_ke2_feed.FeedTests.test_invalid_subscription_is_atomic) ... ok\ntest_only_matching_future_recenters_subscription (test_ke2_feed.FeedTests.test_only_matching_future_recenters_subscription) ... ok\ntest_pending_future_and_exchange_isolation (test_ke2_feed.FeedTests.test_pending_future_and_exchange_isolation) ... ok\ntest_raw_ltp_and_missing_fields (test_ke2_feed.FeedTests.test_raw_ltp_and_missing_fields) ... ok\ntest_stock_contracts_quotes_and_segment_validation (test_ke2_feed.FeedTests.test_stock_contracts_quotes_and_segment_validation) ... ok\ntest_strike_recenter_and_extra_strikes (test_ke2_feed.FeedTests.test_strike_recenter_and_extra_strikes) ... ok\ntest_websocket_snapshot_unsubscribe_resume_and_unsupported (test_ke2_feed.FeedTests.test_websocket_snapshot_unsubscribe_resume_and_unsupported) ... ok\ntest_bse_packet_to_ke2_and_legacy (test_ke2_transport.TransportTests.test_bse_packet_to_ke2_and_legacy) ... ok\ntest_bse_volume_quantities_and_index_snapshots (test_ke2_transport.TransportTests.test_bse_volume_quantities_and_index_snapshots) ... ok\ntest_explicit_long_dated_strikes_do_not_require_a_future (test_ke2_transport.TransportTests.test_explicit_long_dated_strikes_do_not_require_a_future) ... ok\ntest_invalid_subscription_is_atomic (test_ke2_transport.TransportTests.test_invalid_subscription_is_atomic) ... ok\ntest_only_matching_future_recenters_subscription (test_ke2_transport.TransportTests.test_only_matching_future_recenters_subscription) ... ok\ntest_pending_future_and_exchange_isolation (test_ke2_transport.TransportTests.test_pending_future_and_exchange_isolation) ... ok\ntest_raw_ltp_and_missing_fields (test_ke2_transport.TransportTests.test_raw_ltp_and_missing_fields) ... ok\ntest_stock_contracts_quotes_and_segment_validation (test_ke2_transport.TransportTests.test_stock_contracts_quotes_and_segment_validation) ... ok\ntest_stock_packet_to_ke2_and_legacy (test_ke2_transport.TransportTests.test_stock_packet_to_ke2_and_legacy) ... ok\ntest_strike_recenter_and_extra_strikes (test_ke2_transport.TransportTests.test_strike_recenter_and_extra_strikes) ... ok\ntest_websocket_snapshot_unsubscribe_resume_and_unsupported (test_ke2_transport.TransportTests.test_websocket_snapshot_unsubscribe_resume_and_unsupported) ... ok\n\n----------------------------------------------------------------------\nRan 29 tests in 22.446s\n\nOK\n"
+  },
+  {
+    "command": [
+      "venv/bin/python",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests",
+      "-p",
+      "test_bod.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "stdout": "{\"checked_at\": \"2026-10-28T08:40:00+05:30\", \"state\": \"WAITING_BOD\", \"schedule\": \"Weekdays 08:45 IST; five-minute retries and health checks\", \"trade_date\": \"2026-10-28\"}\n{\"checked_at\": \"2026-10-28T10:00:00+05:30\", \"state\": \"READY\", \"schedule\": \"Weekdays 08:45 IST; five-minute retries and health checks\", \"trade_date\": \"2026-10-28\", \"receipt\": \"/tmp/tmp0e96jb66/receipts/2026-10-28.json\", \"expiries\": [\"2031-06-24\"], \"references_deferred_to_next_bod\": true}\n{\"checked_at\": \"2026-10-28T10:00:00+05:30\", \"state\": \"PAUSED\", \"schedule\": \"Weekdays 08:45 IST; five-minute retries and health checks\", \"trade_date\": \"2026-10-28\"}\n",
+    "stderr": "test_all_listed_expiries_include_long_dated_without_inventing_dates (test_bod.BodTests.test_all_listed_expiries_include_long_dated_without_inventing_dates) ... ok\ntest_before_bod_time_waits_without_contacting_share (test_bod.BodTests.test_before_bod_time_waits_without_contacting_share) ... ok\ntest_completed_day_does_not_refresh_again_and_pause_is_respected (test_bod.BodTests.test_completed_day_does_not_refresh_again_and_pause_is_respected) ... ok\ntest_empty_day_binding_can_roll_without_touching_prior_day_results (test_bod.BodTests.test_empty_day_binding_can_roll_without_touching_prior_day_results) ... ok\ntest_real_observations_and_now_requests_prevent_reference_rebind (test_bod.BodTests.test_real_observations_and_now_requests_prevent_reference_rebind) ... ok\n\n----------------------------------------------------------------------\nRan 5 tests in 0.006s\n\nOK\n"
+  },
+  {
+    "command": [
+      ".venv-ke2-api/bin/python",
+      "-m",
+      "unittest",
+      "-v",
+      "test_ke2_api"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "test_docs_health_capabilities_and_master (test_ke2_api.APITests.test_docs_health_capabilities_and_master) ... ok\ntest_invalid_requests_preserve_upstream_error (test_ke2_api.APITests.test_invalid_requests_preserve_upstream_error) ... ok\ntest_real_index_snapshot_and_bod_status_routes (test_ke2_api.APITests.test_real_index_snapshot_and_bod_status_routes) ... ok\ntest_response_timeout_closes_session (test_ke2_api.APITests.test_response_timeout_closes_session) ... ok\ntest_stock_snapshot_quotes_events_and_unsupported (test_ke2_api.APITests.test_stock_snapshot_quotes_events_and_unsupported) ... ok\ntest_unreachable_upstream_is_not_healthy_feed (test_ke2_api.APITests.test_unreachable_upstream_is_not_healthy_feed) ... ok\ntest_unsubscribe_reconnect_and_session_isolation (test_ke2_api.APITests.test_unsubscribe_reconnect_and_session_isolation) ... ok\n\n----------------------------------------------------------------------\nRan 7 tests in 0.278s\n\nOK\n"
+  },
+  {
+    "command": [
+      "systemctl",
+      "--user",
+      "restart",
+      "nse-ke2-stack.service"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

@@ -54,6 +54,40 @@ class FeedTests(unittest.IsolatedAsyncioTestCase):
             resolve.assert_called_once_with(sub)
             self.assertGreater(len(sub.instruments),len(original))
 
+    async def test_bse_volume_quantities_and_index_snapshots(self):
+        event=self.tick(200,exchange="BSE")
+        event.update(volume=123456,ltq=20,bid_qty=60,ask_qty=40)
+        self.feed.ingest(event)
+        self.assertEqual(self.feed.quote(200)["volume"],123456)
+        self.assertEqual(self.feed.quote(200)["bid_qty"],60)
+        self.feed.ingest({"type":"market_index","exchange":"BSE","index_code":1,
+                          "symbol":"SENSEX","ltp":74000,"received_ms":1700000000000})
+        async with serve(self.feed.handler,"127.0.0.1",0) as server:
+            port=server.sockets[0].getsockname()[1]
+            async with connect(f"ws://127.0.0.1:{port}") as client:
+                await client.recv()
+                await client.send(json.dumps({"type":"indices","symbols":["SENSEX"],"request_id":"index"}))
+                reply=json.loads(await client.recv())
+                self.assertEqual(reply["type"],"indices")
+                self.assertEqual(reply["request_id"],"index")
+                self.assertEqual(reply["data"][0]["index_code"],1)
+                self.assertEqual(reply["data"][0]["ltp"],74000)
+                self.assertIsNone(reply["data"][0]["exchange_ts"])
+
+    async def test_explicit_long_dated_strikes_do_not_require_a_future(self):
+        group=self.master.groups[("NIFTY","2026-10-27")]
+        self.master.groups[("NIFTY","2026-10-27")]=[i for i in group if i.option_type]
+        sub=Subscription()
+        request={"expiry":"2026-10-27","underlyings":[{"symbol":"NIFTY","segment":"FO_IDX",
+            "future":False,"options":{"mode":"explicit_strikes","strikes":[150,200],"types":["CE","PE"]}}]}
+        self.feed.subscribe(sub,request)
+        self.assertEqual(len(sub.instruments),4)
+        self.assertEqual(sub.pending,[])
+        previous=sub.instruments.copy()
+        request["underlyings"][0]["options"]["strikes"]=[999999]
+        with self.assertRaises(ValueError):self.feed.subscribe(sub,request)
+        self.assertEqual(sub.instruments,previous)
+
     def request(self, symbol="NIFTY"):
         return {"type":"subscribe", "expiry":"2026-10-27", "underlyings":[
             {"symbol":symbol,"segment":"FO_IDX" if symbol in ("NIFTY","SENSEX") else "FO_STK","future":True,

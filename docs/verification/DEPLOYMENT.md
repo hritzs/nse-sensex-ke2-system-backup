@@ -1,3 +1,5 @@
+> Deployment update, 29 October 2026: see [daily BOD, corrected BSE feed and all listed expiries](../../BOD_AND_SENSEX.md). Earlier deployment/capability statements below are historical.
+
 # Deployment verified on 19 October 2026
 
 All five services were started under the launcher at 14:25 IST:

@@ -27,6 +27,11 @@
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "path": "BOD_AND_SENSEX.md",
+      "bytes": 6772,
+      "sha256": "396fc27471127412c16d31a5d73aff9623c667ffd86b5ba9cf4bc5ec5d5c2c44"
+    },
+    {
       "path": "CMakeLists.txt",
       "bytes": 2656,
       "sha256": "5a691df0083aca7fea3d32f10c26f57819f9dc2b166beff79555149de7ebef66"
@@ -78,18 +83,18 @@
     },
     {
       "path": "KE2_FASTAPI_TESTER.md",
-      "bytes": 8670,
-      "sha256": "0a4a8f1056d7c65049df776b1a356009ca50cf0e7790399f295652b3c4f95f48"
+      "bytes": 8852,
+      "sha256": "2c11cfaae77bd57c1762acbf725dd713219ed239758ae2fd0478cf4fb06753d0"
     },
     {
       "path": "KE2_FEED_IMPLEMENTATION.md",
-      "bytes": 10024,
-      "sha256": "1aa628bdd0661ba7d399a884eea7c83742bd3709000db51ad1926fc9dc1acc2e"
+      "bytes": 10206,
+      "sha256": "42c1c32ea69f7b3abdb725acb5caf952c03e62cef674325baf8247bde525be8e"
     },
     {
       "path": "KE2_STARTUP_AND_API.md",
-      "bytes": 24547,
-      "sha256": "24101d5771fcc939fdae58d8694512f4b7aaa179a173d90881b4f25a9f4d5945"
+      "bytes": 24729,
+      "sha256": "b13c24915fa65666c7aba5279aad13c01aa74eafcd290c6b3f4a1510c2f0a78e"
     },
     {
       "path": "KE2_WebSim_Feed_Spec(1).json",
@@ -198,13 +203,13 @@
     },
     {
       "path": "ke2_feed_server.py",
-      "bytes": 21060,
-      "sha256": "2bb286f15ddd24edffabd2e883c9227c8705c45a5082814cd1bb3956ba541846"
+      "bytes": 24209,
+      "sha256": "26e91877aed34f931680cc4cf9107c4025a7fd8a95941c103fdacf4f17717ba0"
     },
     {
       "path": "ke2_test_api.py",
-      "bytes": 17396,
-      "sha256": "591845a1760372bef830c40e42fdb1aa0beb64854a5692ad2635ca801f29e678"
+      "bytes": 18378,
+      "sha256": "74d7da391fdb3efb67468faf50325ca795656b352111cfaeed9324e101d0828c"
     },
     {
       "path": "main.py",
@@ -948,8 +953,8 @@
     },
     {
       "path": "run_all.sh",
-      "bytes": 1103,
-      "sha256": "d969ef8c513f8cf461935607a2675a2f4da185fa0834081127c5b2ca97f080e4"
+      "bytes": 1267,
+      "sha256": "7b1d20b9b0c821fc4560b3f01cc9efd4a436d45b82f4b51c9531bb22fb9cf1aa"
     },
     {
       "path": "server.js",
@@ -1313,13 +1318,13 @@
     },
     {
       "path": "test_ke2_api.py",
-      "bytes": 7011,
-      "sha256": "9ebbd892e072eeec2ecc239ed3827a5de92f3fa2f6d801d59b05ac175b9f1daa"
+      "bytes": 7599,
+      "sha256": "f805f4c596d313a494f6f70bf0e9ce10d2823d6cb329aadc7078c549e7ccd489"
     },
     {
       "path": "test_ke2_feed.py",
-      "bytes": 8107,
-      "sha256": "2c4d2db7ae8c90a59798d31db8ae875f5defb84a46ea884bf28bc50b55279efa"
+      "bytes": 10127,
+      "sha256": "d4df5f0fda609951ce8634be30986e74b6b3446ad5bf92f45a83f46e6eec78ba"
     },
     {
       "path": "test_ke2_transport.py",
@@ -1480,6 +1485,61 @@
       "path": "backups/base_working_7208_20260429_051714/writer.h",
       "bytes": 213,
       "sha256": "eca825d34476f15a135613a87502c7ee0f86a659e9e6c5d83763660a01787049"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/ke2_feed_server.py",
+      "bytes": 21060,
+      "sha256": "2bb286f15ddd24edffabd2e883c9227c8705c45a5082814cd1bb3956ba541846"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/include/config.h",
+      "bytes": 429,
+      "sha256": "58f6a702edb43373a71101cfc53077e93e0d414b06cbf1686f184aa7d5af7621"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/include/market_feed.h",
+      "bytes": 644,
+      "sha256": "c84ea91378b298133e99c6e934981d345f281036ee0fa96eae6a7d5b2b6c0919"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/indicative_close_server/server.cpp",
+      "bytes": 157479,
+      "sha256": "6c5698a8e2b03716930aecea79cf021f6f29af58547c4a9357525b786b304ab0"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/scripts/refresh_market_inputs.ps1",
+      "bytes": 2072,
+      "sha256": "8f7117874cbf9255690b0ed9f6be051144337c4c8fd0606d3ce41f04bc304c01"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/src/decoder.cpp",
+      "bytes": 21866,
+      "sha256": "f247925b6dbc48938fe72d79f36dc3a443119b30301a3ffe3f61bf41a7801b6d"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/src/main.cpp",
+      "bytes": 31673,
+      "sha256": "389acb344ea2990c0785d2f53150211ee8c54bb28b5acf4e89c601e42bd67f0c"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/src/market_feed.cpp",
+      "bytes": 1780,
+      "sha256": "eb9a033eaaad6f8354c53da36740a979101c105f4172346d49a45f6f4d824638"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/src/ws_server.cpp",
+      "bytes": 47338,
+      "sha256": "15edb07dfbd34c8fecaaeb85dddd12473b77c3183369f9ca6327d077c537db66"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/tests/feed_transport_fixture.cpp",
+      "bytes": 1940,
+      "sha256": "2de45df9f3c7f3c14b4db504026199e5a08ef268388838853e925db598f1637c"
+    },
+    {
+      "path": "backups/bod_sensex_before_changes/20261028-082516/tests/test_bse_feed.cpp",
+      "bytes": 5268,
+      "sha256": "8c383c3626bd3d92d69be1c95761009c0bf765f838f3f0c58b62a10ec1bd5709"
     },
     {
       "path": "backups/completion_before_changes/20261016-102550/gamma_weekly_engine.py",
@@ -1652,6 +1712,11 @@
       "sha256": "f779a1da2be9312ea0e957085fcef7581a5aaca3ef26a755b984054e1bd22701"
     },
     {
+      "path": "backups/master_refresh/20261029-102014-271453/GreekTokens.csv",
+      "bytes": 124990194,
+      "sha256": "79da003ae5a141a33a6d32f60e62024c28e786d35ca4c70c5929dec620be2c22"
+    },
+    {
       "path": "backups/source_disconnect_before_changes/20261019-093820/ke2_feed_server.py",
       "bytes": 20288,
       "sha256": "177a3d166ab60c15c680661c033cf59b342ec9ff4f0f688fa8109e7d0629db4f"
@@ -1778,13 +1843,13 @@
     },
     {
       "path": "docs/architecture/HLD.md",
-      "bytes": 20966,
-      "sha256": "2ce5243d6b0bdf61efbfb1338d4919b767db7a2b7cd1ae4a4286cf20f24963fd"
+      "bytes": 21617,
+      "sha256": "e4afc05df9b1ad04194a82bc0eaf977df8ddf0b66bd7ab0a4ef546706ff5b9ef"
     },
     {
       "path": "docs/architecture/LLD.md",
-      "bytes": 38202,
-      "sha256": "c32df512acdf5325edffa38223a099f3b5012dba8de211625c274e4241202b14"
+      "bytes": 39240,
+      "sha256": "cb2763a5e553a10715b81aaf2c25bcbf6d86daaea62af953b473b5ed6d76c6a8"
     },
     {
       "path": "docs/architecture/README.md",
@@ -1798,8 +1863,8 @@
     },
     {
       "path": "docs/verification/DEPLOYMENT.md",
-      "bytes": 3550,
-      "sha256": "f0567d91cffc18a258ca4442cfad2d76bbaa173fb5e5dfccc538092a6f65bf16"
+      "bytes": 3738,
+      "sha256": "a730f7e3ea84e7f22ae859bdea773fa04d6be58d740bed7b24dcd7b755111067"
     },
     {
       "path": "docs/verification/EXPIRY_REFRESH_20261028.md",
@@ -1810,6 +1875,16 @@
       "path": "docs/verification/SOURCE_DISCONNECT_FIX.md",
       "bytes": 2213,
       "sha256": "0d4374c79b17fa22ab3f9aa7ec4ad4f47766a8b442252f96e7fe9d94f7d8e991"
+    },
+    {
+      "path": "docs/verification/bod_sensex_20261029.json",
+      "bytes": 7811,
+      "sha256": "13e88564cf0ff121f87d2c28439468f6c6333b9731b38f4ab1453cc19074b9ee"
+    },
+    {
+      "path": "docs/verification/bod_sensex_tests_20261029.json",
+      "bytes": 7915,
+      "sha256": "c2e6b6f9592128055842ecffdf86880e2cbf1a7d40b923bc4da7f50d8b428f7b"
     },
     {
       "path": "docs/verification/expiry_refresh_20261028.json",
@@ -1888,8 +1963,8 @@
     },
     {
       "path": "include/contract_loader.h",
-      "bytes": 1673,
-      "sha256": "a43d96ff2d747976618cc9de20b2e0c84cb37c7c9f97316757146a1512e309c0"
+      "bytes": 1627,
+      "sha256": "c19082e7f9861be5c84d4a1f27d3e86e4676a3bb5e077ba53587a13566935011"
     },
     {
       "path": "include/decoder.h",
@@ -1923,8 +1998,8 @@
     },
     {
       "path": "include/market_feed.h",
-      "bytes": 644,
-      "sha256": "c84ea91378b298133e99c6e934981d345f281036ee0fa96eae6a7d5b2b6c0919"
+      "bytes": 791,
+      "sha256": "2b43d33f360ebd2746eaba93f7b98ed7b71f9240b30806d9f2ba1c3ad79346f5"
     },
     {
       "path": "include/option_types.h",
@@ -1958,8 +2033,8 @@
     },
     {
       "path": "indicative_close_server/server.cpp",
-      "bytes": 157479,
-      "sha256": "6c5698a8e2b03716930aecea79cf021f6f29af58547c4a9357525b786b304ab0"
+      "bytes": 157540,
+      "sha256": "2d5b6fecd90cd4c97b35108bf841948ab695fe531679cc41f38d4750b666c752"
     },
     {
       "path": "indicative_close_server/server.cpp.BEFORE_CM_IC_20260908_090527",
@@ -2347,6 +2422,11 @@
       "sha256": "a8857472e5b1983bd018f376a4a85f318fe384508b2e0d4c965e4c8c1e67a9f1"
     },
     {
+      "path": "ops/systemd/nse-ke2-stack.service",
+      "bytes": 534,
+      "sha256": "c16f4e1a9a5c83030e63d63d1dd474ad6ac7703b91c5a91a59f8152db5ab0b10"
+    },
+    {
       "path": "probes/cm_probe_output.txt",
       "bytes": 11913,
       "sha256": "550d7768bed5cabcd69acff375c2c3defc4a2370d0723642c5211ac91bbf1cac"
@@ -2367,6 +2447,16 @@
       "sha256": "ff585bdbf5195cb506b4c2406e24a9b57b6cff03e035afa4f46354084f357a71"
     },
     {
+      "path": "scripts/bod_manager.py",
+      "bytes": 12453,
+      "sha256": "99bba501f0117ad0ae5245599a83b2c06bf757bb2ebcc1a252a600329572a5c7"
+    },
+    {
+      "path": "scripts/bod_tick.sh",
+      "bytes": 268,
+      "sha256": "1162466fa9954de04bf7aa15e5ef5315c538bf59fb18a69ff0e2cfc05fcd1801"
+    },
+    {
       "path": "scripts/build.sh",
       "bytes": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -2382,9 +2472,24 @@
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "path": "scripts/install_bod.py",
+      "bytes": 3558,
+      "sha256": "cfc6d5e2b5e485802a845a724e686228a266969fa56e69cf057e08fa4ca2e550"
+    },
+    {
+      "path": "scripts/install_bod_task.ps1",
+      "bytes": 2001,
+      "sha256": "50df3fca48b8dd1a210fe4694abe606a77a363ad4364f42633e06be742a50356"
+    },
+    {
       "path": "scripts/ke2_probe.py",
       "bytes": 3730,
       "sha256": "2502c42a7ae12f4ef4fb9c3ba1cb4173430add6ef9e31d1e2932dc9998e6249f"
+    },
+    {
+      "path": "scripts/managed_stack.py",
+      "bytes": 1563,
+      "sha256": "431db52412c1c2123bd28fb6baf9e702a97909fd17c47bf0dece497672f71986"
     },
     {
       "path": "scripts/publish_system_backup.py",
@@ -2393,8 +2498,8 @@
     },
     {
       "path": "scripts/refresh_market_inputs.ps1",
-      "bytes": 2072,
-      "sha256": "8f7117874cbf9255690b0ed9f6be051144337c4c8fd0606d3ce41f04bc304c01"
+      "bytes": 3639,
+      "sha256": "3de81a542afb4f2f118071d69d8e2f162424be013bb01dfe0732a629056e79b3"
     },
     {
       "path": "scripts/refresh_master.py",
@@ -2413,8 +2518,8 @@
     },
     {
       "path": "scripts/system_endpoints.py",
-      "bytes": 4564,
-      "sha256": "1f04288eb2c15c6bb913fda1d620b19085c1f7eca2ae39019b597fe11f06bcdf"
+      "bytes": 4622,
+      "sha256": "24c82019b246e59489e37d5369c50e1d4e51bf9d2f68ada82042f3ccf04e6f59"
     },
     {
       "path": "shared/BSEIndexTokens.csv",
@@ -2428,8 +2533,8 @@
     },
     {
       "path": "shared/GreekTokens.csv",
-      "bytes": 124990194,
-      "sha256": "79da003ae5a141a33a6d32f60e62024c28e786d35ca4c70c5929dec620be2c22"
+      "bytes": 118823338,
+      "sha256": "12796d026b72239ae5984859b01e394d37fdb8744f163af365b272e379781578"
     },
     {
       "path": "shared/GreekTokens.csv.backup_before_20260908_update_20260908_054747",
@@ -2443,8 +2548,8 @@
     },
     {
       "path": "shared/NSE_MASTER_PROVENANCE.json",
-      "bytes": 899,
-      "sha256": "ed9b67b578134dde046d17a235c429c8162ae00bc97934d857e68eb3d4e22455"
+      "bytes": 1126,
+      "sha256": "b4ed5a5196f2caeefbdc02a731e1a454a057a08bbe0dbe4e5b54275f29d2625d"
     },
     {
       "path": "shared/cm_bhavcopy/NSEcm09SEP2026bhav.csv",
@@ -2453,8 +2558,8 @@
     },
     {
       "path": "shared/cm_bhavcopy/current.csv",
-      "bytes": 632358,
-      "sha256": "0f9aac3066f23c96e4904f2466978ebb7063175539866c1a9b72d4be5ebc5680"
+      "bytes": 633113,
+      "sha256": "cbfbfbd7b4ed3d54fadf8857b0f4c7a1e603052045013fb6b2bc7bf72e451f94"
     },
     {
       "path": "solid-terminal/.gitignore",
@@ -2593,8 +2698,8 @@
     },
     {
       "path": "src/decoder.cpp",
-      "bytes": 21866,
-      "sha256": "f247925b6dbc48938fe72d79f36dc3a443119b30301a3ffe3f61bf41a7801b6d"
+      "bytes": 23679,
+      "sha256": "4895853b230ba6a890861ef2740c32b9816904605c94eec225eb08200c635c4e"
     },
     {
       "path": "src/decoder.cpp.backup_steady_ns_20260820_052007",
@@ -2643,8 +2748,8 @@
     },
     {
       "path": "src/main.cpp",
-      "bytes": 31673,
-      "sha256": "389acb344ea2990c0785d2f53150211ee8c54bb28b5acf4e89c601e42bd67f0c"
+      "bytes": 32007,
+      "sha256": "eabd6ed9de1bba96d2e8210f2934500360939a292671435e314f4f1b6fce3cdb"
     },
     {
       "path": "src/main.cpp.backup_live_edge_20260820_051658",
@@ -2668,8 +2773,8 @@
     },
     {
       "path": "src/market_feed.cpp",
-      "bytes": 1780,
-      "sha256": "eb9a033eaaad6f8354c53da36740a979101c105f4172346d49a45f6f4d824638"
+      "bytes": 2507,
+      "sha256": "d2bc1d7818a5bb3b741e35173e94e7c757f73bb78e4d3b04d76db4a3a347be5b"
     },
     {
       "path": "src/parser_7208.cpp",
@@ -2703,8 +2808,8 @@
     },
     {
       "path": "src/ws_server.cpp",
-      "bytes": 47338,
-      "sha256": "15edb07dfbd34c8fecaaeb85dddd12473b77c3183369f9ca6327d077c537db66"
+      "bytes": 47593,
+      "sha256": "70d219728d8a8cece3ddc54b76a104177e853f63278433a479848973c2f51b01"
     },
     {
       "path": "src/services/feed_handler/feed_handler.cpp",
@@ -2733,13 +2838,18 @@
     },
     {
       "path": "tests/feed_transport_fixture.cpp",
-      "bytes": 1940,
-      "sha256": "2de45df9f3c7f3c14b4db504026199e5a08ef268388838853e925db598f1637c"
+      "bytes": 2009,
+      "sha256": "652921479be88d3e5c8835c65ffdad82e2c230d723070b8a7553d7477083fc2f"
+    },
+    {
+      "path": "tests/test_bod.py",
+      "bytes": 4277,
+      "sha256": "dbf8b468973ad1c6deee12fc1ef3e1e87e34f049222b408ffe6983a291495e52"
     },
     {
       "path": "tests/test_bse_feed.cpp",
-      "bytes": 5268,
-      "sha256": "8c383c3626bd3d92d69be1c95761009c0bf765f838f3f0c58b62a10ec1bd5709"
+      "bytes": 8991,
+      "sha256": "cf3d6cbf3ef105a59e8becea5a0eb20b527553212632a5896bedd2ce9f3e0199"
     },
     {
       "path": "tests/test_gamma_weekly.py",

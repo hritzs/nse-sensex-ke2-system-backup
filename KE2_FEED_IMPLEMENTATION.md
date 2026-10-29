@@ -1,3 +1,5 @@
+> Deployment update, 29 October 2026: see [daily BOD, corrected BSE feed and all listed expiries](BOD_AND_SENSEX.md). Earlier deployment/capability statements below are historical.
+
 # KE2 adapter: data available from this decoder
 
 This implementation uses only the existing NSE and BSE multicast decoder. It

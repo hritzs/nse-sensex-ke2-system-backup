@@ -958,6 +958,10 @@ int main()
     if (!bse_interface || !*bse_interface) bse_interface = Config::BSE_LOCAL_IP;
     std::thread bse_listener(multicast_listener, Exchange::BSE,
         Config::BSE_MULTICAST_IP, Config::BSE_PORT, bse_interface);
+    const char* bse_eq_interface = std::getenv("BSE_EQ_LOCAL_IP");
+    if (!bse_eq_interface || !*bse_eq_interface) bse_eq_interface = bse_interface;
+    std::thread bse_eq_listener(multicast_listener, Exchange::BSE_EQ,
+        "233.1.2.3", 2003, bse_eq_interface);
     // Start BSE (Sensex) Multicast Listener
 SystemLog("Server is up and running. Waiting for data...");
     
@@ -970,6 +974,8 @@ SystemLog("Server is up and running. Waiting for data...");
         nse_listener.join();
     if (bse_listener.joinable())
         bse_listener.join();
+    if (bse_eq_listener.joinable())
+        bse_eq_listener.join();
 
 
         SystemLog("Listeners stopped. Waiting for worker threads to finish...");

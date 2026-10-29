@@ -17,18 +17,20 @@ static void qty(std::ostream& out, std::optional<uint64_t> v) {
 }
 void publish_market_quote(Exchange exchange, uint32_t token, double ltp,
                           double bid, double ask, std::optional<uint64_t> ltq,
-                          std::optional<uint64_t> bid_qty, std::optional<uint64_t> ask_qty) {
+                          std::optional<uint64_t> bid_qty, std::optional<uint64_t> ask_qty,
+                          std::optional<uint64_t> volume) {
     if (!market_source_active()) return;
     std::ostringstream out;
     out << "{\"type\":\"market_quote\",\"exchange\":\""
         << (exchange == Exchange::NSE ? "NSE" : "BSE")
         << "\",\"token\":" << token << ",\"received_ms\":" << receipt_ms()
         << ",\"exchange_ts\":null,\"last_trade_ts\":null,\"ltp\":";
-    price(out, ltp); out << ",\"bid\":"; price(out,bid);
-    out << ",\"ask\":"; price(out,ask);
+    price(out, ltp); out << ",\"bid\":"; price(out,bid > 0 ? bid : NAN);
+    out << ",\"ask\":"; price(out,ask > 0 ? ask : NAN);
     out << ",\"ltq\":"; qty(out,ltq);
     out << ",\"bid_qty\":"; qty(out,bid_qty);
     out << ",\"ask_qty\":"; qty(out,ask_qty);
+    out << ",\"volume\":"; qty(out,volume);
     out << "}";
     broadcast_market_source(out.str());
 }
@@ -39,5 +41,17 @@ void publish_market_oi(Exchange exchange, uint32_t token, uint64_t oi) {
         << (exchange == Exchange::NSE ? "NSE" : "BSE")
         << "\",\"token\":" << token << ",\"oi\":" << oi
         << ",\"received_ms\":" << receipt_ms() << "}";
+    broadcast_market_source(out.str());
+}
+
+void publish_market_index(uint32_t code, const std::string& symbol, double value) {
+    if (!market_source_active() || !std::isfinite(value) || value <= 0) return;
+    if (symbol.empty() || symbol.find_first_of("\"\\") != std::string::npos) return;
+    for (unsigned char c : symbol) if (c < 32) return;
+    std::ostringstream out;
+    out << "{\"type\":\"market_index\",\"exchange\":\"BSE\",\"index_code\":"
+        << code << ",\"symbol\":\"" << symbol << "\",\"ltp\":";
+    price(out,value);
+    out << ",\"received_ms\":" << receipt_ms() << "}";
     broadcast_market_source(out.str());
 }

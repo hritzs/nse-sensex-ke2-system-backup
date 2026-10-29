@@ -1,3 +1,5 @@
+> Deployment update, 29 October 2026: see [daily BOD, corrected BSE feed and all listed expiries](../../BOD_AND_SENSEX.md). Earlier deployment/capability statements below are historical.
+
 # High-level design: NSE, SENSEX, KE2 and indicative-close system
 
 Design baseline: 19 October 2026, Asia/Kolkata.
@@ -375,3 +377,12 @@ refresh excludes model references and LUTs. --check is read-only and
 --no-refresh-masters permits deliberate offline startup. Consumers retain
 immutable startup maps until the coordinated restart; no runtime C++ map
 replacement is attempted. See docs/verification/EXPIRY_REFRESH_20261028.md.
+
+## Daily BOD control plane
+
+Windows Task Scheduler -> WSL bod_tick.sh -> bod_manager.py -> validated
+immutable snapshot -> systemd user service -> managed_stack.py ->
+start_system.sh -> decoder, KE2, Gamma, indicative and FastAPI.
+The receipt prevents duplicate refresh. Failed new-day inputs stop stale-day
+operation. EQ index and FO outright streams use separate multicast listeners.
+Cash depth and complex instruments have no master mapping and are excluded.
