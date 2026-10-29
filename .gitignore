@@ -38,3 +38,28 @@ build-ke2/
 
 # Verified offline snapshots and isolated publication staging
 backups/system/
+
+# Standalone generated resources and private application state
+standalone/.buildenv/
+standalone/assets/seed/
+standalone/assets/native/
+standalone/assets/whitegamma/
+standalone/assets/licenses/
+standalone/build/
+dist/whitegamma-standalone/
+backups/standalone/
+backups/whitegamma_standalone_before_changes/
+whitegammaApp/**/.buildenv/
+whitegammaApp/**/config*.json
+whitegammaApp/**/trade_check.txt
+whitegammaApp/**/marks.json
+whitegammaApp/**/ui_state.json
+whitegammaApp/**/box.json
+whitegammaApp/**/samples/
+whitegammaApp/**/span/
+whitegammaApp/**/*.exe
+whitegammaApp/**/dist/
+
+# Isolated GitHub publishing and split executable builds
+backups/publication/
+dist/windows-split/

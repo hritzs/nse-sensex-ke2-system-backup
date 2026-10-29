@@ -1,0 +1,65 @@
+{
+  "feed_url": "ws://127.0.0.1:19004/",
+  "http_host": "127.0.0.1",
+  "http_port": 18200,
+  "marks_from": "local",
+  "prev_date": null,
+  "prev_date_file": null,
+  "holidays": [],
+  "session": {
+    "start": "09:15",
+    "end": "15:40"
+  },
+  "price_source": "ltp",
+  "stress_shocks": [
+    0.01,
+    0.02,
+    0.05,
+    0.1
+  ],
+  "expiry_extra_days": {},
+  "refresh_seconds": 1,
+  "file_poll_seconds": 3,
+  "show_chain": true,
+  "span": {
+    "folder": "span",
+    "download": true,
+    "refresh_seconds": 300,
+    "bse_urls": []
+  },
+  "indices": {
+    "NIFTY": {
+      "board_expiries": 6,
+      "fwd_round": 100,
+      "chain_strikes_each_side": 15,
+      "display_chain_each_side": 5
+    },
+    "BANKNIFTY": {
+      "board_expiries": 3,
+      "fwd_round": 500,
+      "chain_strikes_each_side": 15,
+      "display_chain_each_side": 5
+    },
+    "SENSEX": {
+      "board_expiries": 4,
+      "fwd_round": 500,
+      "chain_strikes_each_side": 15,
+      "display_chain_each_side": 5
+    }
+  },
+  "files": {
+    "bhavcopy": [],
+    "tokens": [],
+    "prev_positions": null,
+    "trades": [],
+    "trade_columns": {
+      "symbol": 3,
+      "expiry": 4,
+      "strike": 5,
+      "option_type": 6,
+      "side": 13,
+      "qty": 14,
+      "price": 15
+    }
+  }
+}

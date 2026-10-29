@@ -1,0 +1,1384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhiteGamma Live</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --panel2:#f1f3f6; --line:#e2e5ea; --grid:#d3d8df; --sq:#fdf0d2; --text:#16191d; --muted:#6b7380;
+  --pos:#0f7b4a; --neg:#c0352b; --warn:#a86400; --accent:#2554c7; --hl:#fff6d6; --atm:#e8efff; --mark:#ece6ff; --markt:#5b34c9;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1115; --panel:#161a20; --panel2:#1c2129; --line:#272d36; --grid:#343b47; --sq:#3a2f15; --text:#e6e9ee; --muted:#8b94a3;
+    --pos:#3ecf8e; --neg:#ff6b5e; --warn:#f0b450; --accent:#7aa2ff; --hl:#2a2614; --atm:#18233a; --mark:#2a2147; --markt:#b8a4ff;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1115; --panel:#161a20; --panel2:#1c2129; --line:#272d36; --grid:#343b47; --sq:#3a2f15; --text:#e6e9ee; --muted:#8b94a3;
+  --pos:#3ecf8e; --neg:#ff6b5e; --warn:#f0b450; --accent:#7aa2ff; --hl:#2a2614; --atm:#18233a; --mark:#2a2147; --markt:#b8a4ff;
+}
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
+  padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:15px;margin:0;font-weight:650;letter-spacing:.2px}
+.kv{display:flex;gap:6px;align-items:baseline;color:var(--muted)}
+.kv b{color:var(--text);font-family:var(--mono);font-weight:600}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;border:1px solid var(--line);
+  font-size:12px;cursor:pointer;background:var(--panel2);color:var(--text)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.ok .dot{background:var(--pos)} .bad .dot{background:var(--neg)} .warn .dot{background:var(--warn)}
+.spacer{flex:1}
+.zoomctl{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);padding:1px}
+.zoomctl button{width:26px;height:24px;padding:0;line-height:22px;font:700 14px system-ui,sans-serif;border:none;background:transparent;border-radius:4px}
+.zoomctl button:hover{background:var(--line)}
+.zoomctl #zoompct{min-width:42px;text-align:center;font:600 12px var(--mono);color:var(--text);user-select:none}
+#keyshelp{width:28px;height:26px;padding:0;font:700 14px system-ui,sans-serif;border-radius:6px}
+#keysdrawer{position:fixed;top:52px;right:16px;z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 8px 28px rgba(0,0,0,.18);padding:12px 16px;min-width:280px;font-size:13px;display:none}
+#keysdrawer.open{display:block}
+#keysdrawer h3{margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+#keysdrawer table{width:100%;border-collapse:collapse}
+#keysdrawer td{padding:3px 8px 3px 0;font-family:var(--mono);font-size:12px}
+#keysdrawer td:last-child{color:var(--muted);font-family:system-ui,sans-serif}
+#keysdrawer kbd{display:inline-block;padding:1px 6px;border:1px solid var(--line);border-radius:4px;background:var(--panel2);font:600 11px var(--mono)}
+#keysdrawer td.sec{padding-top:8px;color:var(--muted);font:600 11px system-ui,sans-serif;text-transform:uppercase;letter-spacing:.4px}
+button,select{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:3px 9px;cursor:pointer}
+main{padding:14px 16px 40px;display:grid;gap:14px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+section>h2{margin:0;padding:8px 12px;font-size:12px;font-weight:650;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);
+  border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+section>h2>span{white-space:nowrap}
+.grid2{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:14px}
+@media (max-width:1100px){.grid2{grid-template-columns:1fr}}
+.grid2.onemin{grid-template-columns:1fr;gap:8px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:12px}
+th,td{padding:4px 8px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--grid);border-right:1px solid var(--grid)}
+thead th{border-bottom:1px solid var(--muted)}
+th:last-child,td:last-child{border-right:1px solid var(--grid)}
+th{font-family:system-ui,sans-serif;font-weight:600;color:var(--muted);font-size:11px;background:var(--panel2);position:sticky;top:0}
+td:first-child,th:first-child{text-align:left}
+tr.total td{font-weight:700;background:var(--panel2)}
+.pos{color:var(--pos)} .neg{color:var(--neg)} .muted{color:var(--muted)} .stale{color:var(--warn);font-style:italic}
+.tabs{display:flex;gap:4px;padding:6px 8px;border-bottom:1px solid var(--line);flex-wrap:wrap;align-items:center}
+.tab{padding:4px 12px;border-radius:6px;cursor:pointer;color:var(--muted);font-weight:600}
+.tab.on{background:var(--accent);color:#fff}
+.opts{margin-left:auto;display:flex;gap:12px;align-items:center;color:var(--muted);font-size:12px}
+.books{display:flex;gap:12px;overflow-x:auto;padding:12px;align-items:flex-start}
+.bcol{display:flex;flex-direction:column;gap:12px;flex:0 0 auto}
+.expbar .collen{width:64px}
+.expbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 12px 0;font-size:12px}
+.expbar:empty{display:none}
+.eb{font:600 12px var(--mono);padding:3px 9px}
+.eb .tag{margin-left:5px}
+.eb.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.eb.on .tag{color:#fff;border-color:rgba(255,255,255,.6)}
+.eb.nopos{opacity:.6}
+.card{width:max-content;min-width:430px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+table.rt{table-layout:fixed;width:auto}
+table.rt.auto{table-layout:auto;width:100%}
+table.rt.auto.fit{width:max-content}
+td.edit{cursor:cell}
+td.marked{background:var(--mark);color:var(--markt);font-weight:700;box-shadow:inset 0 0 0 1px var(--markt)}
+td.editing{padding:0}
+td.editing input{width:100%;font:inherit;text-align:right;border:1px solid var(--accent);padding:3px 6px;background:var(--panel);color:var(--text)}
+.tbar{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font:500 11px system-ui,sans-serif;color:var(--muted);text-transform:none;letter-spacing:0}
+.tbar input[type=number]{width:58px;font:inherit;padding:2px 4px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--text)}
+.tbar button{font-size:11px;padding:2px 7px}
+.cardbar{padding:5px 10px;border-bottom:1px solid var(--line)}
+.markcount{color:var(--markt);font-weight:700}
+.colpick{display:none;padding:8px 12px;border-bottom:1px solid var(--line);gap:18px;flex-wrap:wrap}
+.colpick.open{display:flex}
+.colpick fieldset{border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin:0;max-width:640px}
+.colpick legend{font-weight:650;color:var(--text);font-size:12px}
+.colpick label{display:inline-block;margin:2px 10px 2px 0;font-size:12px;white-space:nowrap}
+.colpick .lnk{font-size:11px;margin-left:6px;cursor:pointer;color:var(--accent)}
+table.rt th,table.rt td{overflow:hidden;text-overflow:ellipsis}
+table.rt th{position:sticky}
+.rz{position:absolute;top:0;right:0;bottom:0;width:7px;cursor:col-resize;user-select:none;z-index:2}
+.rz:hover,.rz.on{background:var(--accent);opacity:.45}
+body.resizing{cursor:col-resize;user-select:none}
+.tabpane{padding:0}
+.card h3{margin:0;padding:8px 10px;font-size:13px;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;border-bottom:1px solid var(--line);background:var(--panel2)}
+.tag{font-size:10px;padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--muted);font-weight:600}
+.cardstats{display:grid;grid-template-columns:repeat(6,1fr);gap:0;border-bottom:1px solid var(--grid)}
+.cardstats div{padding:5px 8px;border-right:1px solid var(--grid);border-bottom:1px solid var(--grid)}
+.cardstats div:nth-child(6n){border-right:0}
+.cardstats div:nth-last-child(-n+5){border-bottom:0}
+.cardstats div:last-child{border-right:0}
+.cardstats>div>span{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.cardstats b{font-family:var(--mono);font-size:13px}
+.addtag{font:600 9px system-ui,sans-serif;color:var(--markt);border:1px solid var(--markt);border-radius:3px;padding:0 3px;margin-left:5px;vertical-align:1px}
+.addk{width:84px}
+select.smk{font:12px var(--mono);padding:1px 4px;width:100%}
+input.smk{font:12px var(--mono);width:100%;text-align:right;padding:1px 4px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:4px}
+.atmtag{font:600 9px system-ui,sans-serif;color:var(--accent);border:1px solid var(--accent);border-radius:3px;padding:0 3px;margin-left:5px;vertical-align:1px}
+.card table tr.atm td:first-child{font-weight:700}
+.ivsel{margin-left:auto;display:flex;gap:10px;font:500 11px system-ui,sans-serif;color:var(--muted)}
+.ivsel input{vertical-align:-2px;margin:0 3px 0 0}
+.card table tr.chain td{color:var(--muted)}
+.drawer{display:none;padding:10px 12px;border-top:1px solid var(--line)}
+.drawer.open{display:block}
+.note{padding:10px 12px;color:var(--muted)}
+.err{color:var(--neg)}
+.mastwarn{border:1px solid var(--neg);border-radius:8px;background:color-mix(in srgb,var(--neg) 8%,transparent);color:var(--text)}
+.mastwarn b{color:var(--neg)}
+.mbadge{margin-left:12px;font-size:12px;font-weight:600;text-transform:none;letter-spacing:0;color:var(--muted);cursor:help}
+.mbadge b{color:var(--text);font-family:var(--mono)}
+.mchk h5{margin:8px 0 4px;font-size:12px}
+.mchk .ok{color:var(--pos)}
+td.sedit{cursor:cell}
+.derived{font-style:italic;color:var(--markt)}
+td.sel{background:rgba(122,162,255,.30) !important;box-shadow:inset 0 0 0 1px var(--accent)}
+table[data-t] tbody td{cursor:cell}
+body.selecting{user-select:none;cursor:cell}
+#selbar{position:fixed;right:14px;bottom:12px;z-index:20;display:flex;gap:12px;align-items:center;padding:6px 12px;border:1px solid var(--grid);
+  border-radius:8px;background:var(--panel);box-shadow:0 4px 16px rgba(0,0,0,.18);font-size:12px;color:var(--muted)}
+#selbar b{font-family:var(--mono);color:var(--text)}
+#selbar[hidden]{display:none}
+.mintog{width:22px;height:20px;padding:0;line-height:16px;font:700 14px system-ui,sans-serif;margin-right:2px}
+section.min>h2{border-bottom:0}
+section.min>h2 .tbar,section.min>h2 #sumcolbtn,section.min>:not(h2){display:none !important}
+.books{scrollbar-width:none}
+.books::-webkit-scrollbar{display:none}
+.bnav{display:flex;align-items:stretch;gap:4px;margin:6px 12px 0;user-select:none}
+.bnav[hidden]{display:none}
+.bnav button{padding:0 6px;font-size:9px;line-height:1;border-radius:4px}
+.navtrack{position:relative;flex:1;height:16px;border:1px solid var(--grid);border-radius:4px;background:var(--panel2);overflow:hidden;cursor:pointer}
+.navseg{position:absolute;top:0;bottom:0;border-right:1px solid var(--grid);font:600 10px var(--mono);color:var(--muted);
+  display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;padding:0 3px;font-size:9px}
+.navseg.vis{color:var(--text)}
+.navwin{position:absolute;top:0;bottom:0;background:color-mix(in srgb,var(--accent) 22%,transparent);border:1.5px solid var(--accent);border-radius:3px;cursor:grab}
+.navwin.drag{cursor:grabbing}
+.boxset{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.boxset label{display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
+.boxset input{width:76px;font:12px var(--mono);padding:2px 5px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:4px;text-align:right}
+.boxset select{font:12px var(--mono);padding:1px 4px}
+.boxset input:disabled{opacity:.7;cursor:not-allowed;background:var(--panel2)}
+.boxinfo{display:flex;flex-wrap:wrap;gap:6px 18px;padding:8px 12px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line)}
+.boxinfo b{font-family:var(--mono);color:var(--text)}
+.boxbest{display:flex;flex-wrap:wrap;gap:10px;padding:10px 12px}
+.bb{border:1px solid var(--line);border-radius:8px;padding:6px 12px;background:var(--panel2);font-size:12px;color:var(--muted)}
+.bb b{font:700 15px var(--mono);color:var(--text)}
+.boxsec{padding:4px 12px 12px}
+.boxsec h4{margin:10px 0 6px;font-size:12px;font-weight:650;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:flex;gap:10px;align-items:center}
+.boxexps>div{margin-bottom:14px;overflow-x:auto}
+table.heat td{padding:2px 4px;font-size:11px;min-width:44px}
+table.heat th{padding:2px 4px;font-size:10px}
+table.heat td.out{opacity:.35}
+tr.sqoff td{background:var(--sq)}
+tr.sqoff td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+.sqkey{display:inline-block;width:12px;height:12px;border-radius:3px;background:var(--sq);box-shadow:inset 3px 0 0 var(--warn);vertical-align:-2px;margin-right:4px}
+table.heat td.topn{outline:2px solid var(--accent);outline-offset:-2px;font-weight:700}
+table.heat td{cursor:crosshair}
+table.heat td.xl{box-shadow:inset 0 0 0 999px rgba(122,162,255,.16)}
+table.heat td.xs{outline:2px solid var(--warn);outline-offset:-2px;font-weight:800;box-shadow:inset 0 0 0 999px rgba(240,180,80,.35)}
+table.heat th.xh{background:var(--accent);color:#fff}
+table.heat thead th{position:sticky;top:0;z-index:1}
+table.heat tbody th{position:sticky;left:0;background:var(--panel2);z-index:1}
+table.heat thead th:first-child{left:0;z-index:3;background:var(--panel2)}
+.gridinfo{font-size:12px;padding:6px 8px;margin:4px 0;border:1px solid var(--grid);border-radius:6px;background:var(--panel2);line-height:1.6}
+.gridinfo b{font-family:var(--mono)}
+.xclear{margin-left:8px;font-size:11px;padding:0 6px}
+.tradebar{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px 10px;font-size:12px;color:var(--muted)}
+.tradebar:empty{display:none}
+.tf{display:inline-flex;gap:10px;align-items:baseline;padding:3px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel2)}
+.tf .nm{color:var(--text);font-weight:650}
+.tf b{font-family:var(--mono);font-weight:600;color:var(--text)}
+.tf .ago{font-size:11px}
+.tf.missing{border-style:dashed}
+.tf{gap:6px}
+.tf .sep{color:var(--muted)}
+.fx{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--muted)}
+.fdot{width:8px;height:8px;border-radius:50%;background:var(--neg)}
+.fdot.ok{background:var(--pos)}
+.tf b.pos{color:var(--pos)} .tf b.neg{color:var(--neg)}
+.tbar button.on{border-color:var(--accent);color:var(--accent)}
+tr.grp{cursor:pointer} tr.grp:hover td{background:var(--panel2)}
+.caret{display:inline-block;width:14px;color:var(--muted);font-size:10px}
+table.fillt th,table.fillt td{padding-left:6px;padding-right:6px}
+tr.sub td{background:var(--bg);font-size:11.5px}
+tr.sub td:first-child{padding-left:20px;color:var(--muted)}
+tr.sub td:first-child .tag{margin-left:4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>WhiteGamma Live</h1>
+  <div class="kv">IST <b id="clock">--:--:--</b></div>
+  <div class="kv">Day left <b id="dayleft">-</b></div>
+  <div class="kv">Prev close <b id="prevdate">-</b></div>
+  <span class="pill" id="feedpill" title="market feed connections"><span class="dot"></span><span id="feedtxt">connecting…</span></span>
+  <span class="pill" id="filepill" title="Input files"><span class="dot"></span><span id="filetxt">files</span></span>
+  <span class="spacer"></span>
+  <span class="kv">calc <b id="calcms">-</b></span>
+  <button id="reload" title="Re-read bhavcopy, previous positions and trade files">Reload files</button>
+  <button id="saveui" title="Save layout, checkboxes, column widths, zoom and open tab for next launch">Save</button>
+  <button id="theme" title="Toggle light/dark">Theme</button>
+  <span class="zoomctl" title="Page zoom (like Excel)">
+    <button id="zoomout" title="Zoom out">−</button>
+    <span id="zoompct">100%</span>
+    <button id="zoomin" title="Zoom in">+</button>
+  </span>
+  <button id="keyshelp" title="Keyboard shortcuts">?</button>
+  <div class="tradebar" id="tradebar"></div>
+</header>
+<div id="keysdrawer">
+  <h3>Keyboard shortcuts</h3>
+  <table>
+    <tr><td><kbd>Alt</kbd>+<kbd>N</kbd> / <kbd>B</kbd> / <kbd>S</kbd></td><td>NIFTY / BANKNIFTY / SENSEX tab</td></tr>
+    <tr><td><kbd>Alt</kbd>+<kbd>F</kbd></td><td>Synthetic Future &amp; IV tab</td></tr>
+    <tr><td><kbd>Alt</kbd>+<kbd>R</kbd> / <kbd>L</kbd></td><td>Borrow / Lend tab</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>PageDown</kbd> / <kbd>PageUp</kbd></td><td>Next / previous tab</td></tr>
+    <tr><td><kbd>Alt</kbd>+<kbd>G</kbd></td><td>Minimise / maximise Greeks &amp; P&amp;L</td></tr>
+    <tr><td><kbd>Alt</kbd>+<kbd>V</kbd></td><td>Minimise / maximise VAR Summary</td></tr>
+  </table>
+</div>
+<div id="selbar" hidden></div>
+<div class="drawer" id="feeddrawer"></div>
+<div class="drawer" id="filedrawer"></div>
+<main>
+  <div id="waiting" class="note" hidden></div>
+  <div id="mastwarn" class="note mastwarn" hidden></div>
+  <div class="grid2">
+    <section id="sec-summary"><h2><button class="mintog" data-min="summary" title="minimise / maximise (Alt+G)">−</button>Greeks &amp; P&amp;L <span class="muted" style="text-transform:none;letter-spacing:0">vs previous close, ₹</span><span id="marginbadge" class="mbadge"></span><span class="markcount" id="summarkn" style="margin-left:auto"></span><button id="sumreset" title="clear the typed-over values in this table (back to the calculated ones)">↺ Refresh</button><button id="sumcolbtn" title="show / hide columns">Columns ▾</button><span class="tbar fill" data-tbar="summary"></span></h2>
+      <div class="colpick" id="sumpick"></div>
+      <div class="scroll" id="summary"></div></section>
+    <section id="sec-stress"><h2><button class="mintog" data-min="stress" title="minimise / maximise (Alt+V)">−</button>VAR Summary <span class="muted" style="text-transform:none;letter-spacing:0">₹ lakh, Synthetic Future shocked, IV held</span><span class="tbar fill" style="margin-left:auto" data-tbar="stress"></span></h2>
+      <div class="scroll" id="stress"></div></section>
+  </div>
+  <section>
+    <div class="tabs" id="tabs"></div>
+    <div class="colpick" id="colpick"></div>
+    <div class="expbar" id="expbar"></div>
+    <div class="bnav" id="booksNav" hidden><button data-nav="-1" title="previous column">◀</button>
+      <div class="navtrack" id="navtrack" title="drag the box, click a date or use the mouse wheel to move along the expiries"></div>
+      <button data-nav="1" title="next column">▶</button></div>
+    <div class="books" id="books"></div>
+    <div class="scroll tabpane" id="boardpane" hidden></div>
+    <div class="tabpane" id="boxpane" hidden></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const S = { snap:null, sym:null, boardSym:'ALL', showChain:true, posOnly:false, ivmode:{}, colw:{}, bcols:{}, drag:null, editing:false, autow:{}, open:{sum:[], str:[]}, scols:{}, exp:{}, boxSym:'NIFTY', boxGrid:{}, mins:{}, zoom:100 };
+try { const t = localStorage.getItem('wg-theme'); if (t) document.documentElement.dataset.theme = t;
+      S.posOnly = localStorage.getItem('wg-posonly') === '1';
+      S.sym = localStorage.getItem('wg-sym'); S.ivmode = JSON.parse(localStorage.getItem('wg-ivmode') || '{}');
+      S.colw = JSON.parse(localStorage.getItem('wg-colw') || '{}'); S.bcols = JSON.parse(localStorage.getItem('wg-bcols') || '{}');
+      S.open = Object.assign(S.open, JSON.parse(localStorage.getItem('wg-open') || '{}'));
+      S.scols = JSON.parse(localStorage.getItem('wg-scols') || '{}'); S.exp = JSON.parse(localStorage.getItem('wg-exp') || '{}'); S.boxSym = localStorage.getItem('wg-boxsym') || 'NIFTY'; S.mins = JSON.parse(localStorage.getItem('wg-mins') || '{}'); S.colLen = Number(localStorage.getItem('wg-collen')) || 0;
+      S.zoom = Math.min(200, Math.max(50, Number(localStorage.getItem('wg-zoom')) || 100));
+      if (localStorage.getItem('wg-fillv') !== '1'){ ['summary','stress','board'].forEach(t => delete S.colw[t]);
+        localStorage.setItem('wg-colw', JSON.stringify(S.colw)); localStorage.setItem('wg-fillv', '1'); } } catch(e) {}
+const store = (k,v) => { try { localStorage.setItem(k,v) } catch(e) {} };
+
+const nf0 = new Intl.NumberFormat('en-IN',{maximumFractionDigits:0});
+const nf1 = new Intl.NumberFormat('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1});
+const nf2 = new Intl.NumberFormat('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const blank = v => v===null || v===undefined || Number.isNaN(v);
+const n0 = v => blank(v) ? '' : nf0.format(v);
+const n1 = v => blank(v) ? '' : nf1.format(v);
+const n2 = v => blank(v) ? '' : nf2.format(v);
+const pct = v => blank(v) ? '' : (v*100).toFixed(2);
+const sgn = (v, f=n0) => { if (blank(v)) return ''; let t = f(v); if (/^-0(\.0+)?$/.test(t)) t = t.slice(1);
+  const z = /^0(\.0+)?$/.test(t); return `<span class="${z?'':v>0?'pos':'neg'}">${t}</span>`; };
+const nz1 = v => (blank(v) || Math.abs(v) < 0.05) ? '' : sgn(v, n1);   // 0.0 shows blank
+const MMM = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const dmy = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso||''); return m ? `${m[3]}${MMM[+m[2]-1]}${m[1]}` : (iso||''); };   // 2026-10-27 -> 27Oct2026
+const qty = v => !v ? '' : `<span class="${v>0?'pos':'neg'}">${nf0.format(v)}</span>`;
+const px = (v, src) => blank(v) ? '' : `<span class="${src==='close'?'stale':''}" title="${src==='close'?'previous close (no live quote yet)':'live'}">${n2(v)}</span>`;
+
+const esc = t => String(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+// trade files at the top: when each was last modified, and its buy / sell quantity
+function tradeBar(s){
+  const now = s.ts ? new Date(s.ts) : new Date();
+  const ago = iso => { const m = Math.round((now - new Date(iso)) / 60000);
+    return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : Math.floor(m/60) + 'h ' + (m%60) + 'm ago'; };
+  const when = iso => iso.slice(0,10) === (s.ts||'').slice(0,10) ? iso.slice(11,19) : dmy(iso) + ' ' + iso.slice(11,19);
+  const q = v => nf0.format(v||0);
+  // one box per trader: NSE + BSE files combined, modified = the later of the two
+  const groups = {};
+  (s.files||[]).filter(x=>x.name.startsWith('trades ')).forEach(x => {
+    const full = x.name.slice(7), nm = full.replace(/\s+(NSE|BSE)$/i, '');
+    (groups[nm] = groups[nm] || []).push({...x, label: full});
+  });
+  $('tradebar').innerHTML = Object.entries(groups).map(([nm, fs]) => {
+    const found = fs.filter(x=>x.path);
+    const tip = fs.map(x => {
+      if (!x.path) return `${x.label}: today's file not found (${x.expected||x.template})`;
+      const c = x.check || {}, sk = Object.entries(c.skipped||{});
+      const by = Object.entries(x.by_sym||{}).map(([k,v])=>`   ${k}: buy ${q(v.buy)}, sell ${q(v.sell)}, net ${q(v.buy-v.sell)}`).join('\n');
+      return `${x.label}: ${x.path}\n   modified ${x.mtime?when(x.mtime):'-'} · ${x.trades||0} trades · buy ${q(x.buy)} · sell ${q(x.sell)}` +
+        (sk.length ? `\n   skipped ${sk.map(([k,v])=>`${v} ${k}`).join(', ')}` : '') + (x.error ? `\n   ${x.error}` : '') + (by ? '\n'+by : '');
+    }).join('\n\n');
+    const buy = found.reduce((a,x)=>a+(x.buy||0),0), sell = found.reduce((a,x)=>a+(x.sell||0),0);
+    const latest = found.map(x=>x.mtime).filter(Boolean).sort().pop();
+    const bad = found.filter(x => !x.trades && (x.check||{}).lines);
+    // NSE / BSE status dots: green = today's file found, red = not found
+    const ex = fs.map(x => { const e = (x.label.match(/(NSE|BSE)$/i)||[])[1] || (x.format === 'bse' ? 'BSE' : 'NSE');
+      return `<span class="fx" title="${esc(x.path ? x.label+': '+x.path : x.label+': today\'s file not found')}"><span class="fdot ${x.path?'ok':'bad'}"></span>${e.toUpperCase()}</span>`; }).join('');
+    const sep = '<span class="sep">·</span>';
+    return `<span class="tf ${found.length?'':'missing'}" title="${esc(tip)}"><span class="nm">${nm}</span>${sep}` +
+      (latest ? `<span><b>${when(latest)}</b> <span class="ago">${ago(latest)}</span></span>` : '<span class="muted">no file yet</span>') + sep +
+      `<span>Buy <b class="pos">${q(buy)}</b></span>${sep}<span>Sell <b class="neg">${q(sell)}</b></span>${sep}${ex}` +
+      `${bad.length?`<span class="err">${bad.map(x=>x.label).join(', ')}: no trades read</span>`:''}</span>`;
+  }).join('');
+}
+function header(s){
+  tradeBar(s);
+  $('clock').textContent = (s.ts||'').slice(11,19);
+  $('dayleft').textContent = blank(s.day_left) ? '-' : s.day_left.toFixed(3);
+  $('prevdate').textContent = s.prev_date ? dmy(s.prev_date) : '-';
+  $('calcms').textContent = blank(s.compute_ms) ? '-' : s.compute_ms + ' ms';
+  const f = s.feed || {}; const conns = f.connections || [];
+  const up = conns.filter(c=>c.connected).length;
+  const age = f.last_quote_age_s;
+  let cls='bad', txt='Feed down';
+  if (f.master_error) { txt = 'Feed master: ' + f.master_error.slice(0,60); }
+  else if (conns.length && up===conns.length && age!==null && age<10) { cls='ok'; txt=`Feed ${up}/${conns.length} · ${age}s`; }
+  else if (up) { cls='warn'; txt=`Feed ${up}/${conns.length}` + (age===null?' · no quotes yet':` · last quote ${age}s`); }
+  // token check: contracts we hold / traded today that the feed's token list doesn't have get no live price
+  const mc = s.master_check || {}, gone = (mc.held||[]).concat(mc.traded||[]);
+  const cname = x => `${x.sym} ${dmy(x.exp)} ${x.kind==='FUT' ? 'FUT' : n0(x.strike)+' '+x.kind}`;
+  if (gone.length && cls === 'ok') cls = 'warn';
+  const mw = $('mastwarn'), newx = mc.token_expiries || [];
+  if (newx.length && cls === 'ok') cls = 'warn';
+  const newHtml = newx.length ? `<b>Listed by the exchange but not in the feed yet:</b> ${newx.map(x=>`${x.sym} ${dmy(x.exp)} <span class="muted">(${x.contracts} contracts)</span>`).join(' · ')}<br>
+      <span class="muted">Shown from the daily token files without live prices. Run the input refresh on the feed PC (start_system.sh --refresh-inputs --restart); this app checks the feed every minute and picks it up by itself.</span>` : '';
+  if (gone.length || newx.length){
+    const html = (gone.length ? (() => {
+      const list = gone.slice(0, 8).map(x => `${cname(x)} <span class="muted">(${'trades' in x ? 'traded today' : 'held'} ${nf0.format(x.qty)})</span>`).join(' · ');
+      return `<b>Not in the feed's token list – no live price for ${gone.length} contract${gone.length>1?'s':''} you hold or traded:</b> ${list}${gone.length>8?` · and ${gone.length-8} more (Feed pill)`:''}<br>
+      <span class="muted">Refresh the feed adapter's inputs on the feed PC (they come from the daily token files); this app picks the new list up within a few minutes. Until then these use the previous close.</span>`;
+    })() : '') + (gone.length && newx.length ? '<br>' : '') + newHtml;
+    if (mw._html !== html){ mw.innerHTML = html; mw._html = html; }
+    mw.hidden = false;
+  } else mw.hidden = true;
+  $('feedpill').className = 'pill ' + cls; $('feedtxt').textContent = txt + (gone.length ? ` · ${gone.length} not in token list` : '') + (newx.length ? ` · ${newx.length} new expir${newx.length>1?'ies':'y'} not in feed` : '');
+  $('feeddrawer').innerHTML = `<div class="scroll"><table><tr><th>Index</th><th>Expiry</th><th>Socket</th><th>Feed status</th><th>Subscribed</th><th>Strikes asked</th><th>Source</th><th>Pending</th><th>Error</th></tr>` +
+    conns.map(c=>`<tr><td>${c.symbol}</td><td>${dmy(c.expiry)}</td><td>${c.connected?'up':'down'}</td><td>${c.status}</td><td>${c.subscribed}</td><td>${c.requested_strikes}</td><td>${c.source_connected?'yes':'no'}</td><td>${(c.pending||[]).map(p=>p.reason).join(', ')}</td><td class="err">${c.last_error||''}</td></tr>`).join('') +
+    `</table></div><p class="muted">Feed ${f.url||''} · master ${f.master_instruments||0} index contracts loaded ${f.master_loaded_at||''}</p>` +
+    (mc.ready ? `<div class="mchk"><h5>Token check (feed's token list vs your positions, today's trades and the previous bhavcopy)</h5>
+      ${gone.length ? `<p class="err">Held / traded but not in the token list: ${gone.map(cname).join(', ')}</p>` : '<p class="ok">✓ Every contract you hold or traded today is in the token list.</p>'}
+      ${(mc.bhav_expiries||[]).length ? `<p class="err">Expiries in the bhavcopy but not in the token list: ${mc.bhav_expiries.map(x=>`${x.sym} ${dmy(x.exp)} (${x.contracts} contracts)`).join(', ')}</p>` : '<p class="ok">✓ Every bhavcopy expiry is in the token list.</p>'}
+      ${(mc.bhav_strikes||[]).length ? `<p class="muted">Bhavcopy strikes not in the token list: ${mc.bhav_strikes.map(x=>`${x.sym} ${dmy(x.exp)}: ${x.count} (${x.strikes.map(n0).join(', ')}${x.count>x.strikes.length?', …':''})`).join(' · ')}</p>` : '<p class="ok">✓ Every bhavcopy strike is in the token list.</p>'}
+      ${mc.token_contracts ? (newx.length ? `<p class="err">In the daily token files (1.85) but not in the feed: ${newx.map(x=>`${x.sym} ${dmy(x.exp)} (${x.contracts} contracts)`).join(', ')}</p>` : '<p class="ok">✓ Every expiry in the daily token files (1.85) is in the feed.</p>') +
+        ((mc.token_strikes||[]).length ? `<p class="muted">Token-file strikes not in the feed: ${mc.token_strikes.map(x=>`${x.sym} ${dmy(x.exp)}: ${x.count} (${x.strikes.map(n0).join(', ')}${x.count>x.strikes.length?', …':''})`).join(' · ')}</p>` : '<p class="ok">✓ Every token-file strike is in the feed.</p>')
+        : '<p class="muted">Daily token files (1.85) not loaded – see Input files.</p>'}
+      </div>` : '<p class="muted">Token check runs once the instrument master has loaded.</p>');
+  const files = s.files || [];
+  const missing = files.filter(x=>!x.path && !x.name.startsWith('trades') && !x.name.startsWith('SPAN') && !x.name.startsWith('exposure'));
+  const fb = files.filter(x=>x.fallback);
+  $('filepill').className = 'pill ' + (missing.length ? 'bad' : fb.length ? 'warn' : 'ok');
+  $('filetxt').textContent = missing.length ? `${missing.length} input missing` : fb.length ? 'older file in use' : 'inputs loaded';
+  $('filedrawer').innerHTML = `<div class="scroll"><table><tr><th>Input</th><th>File in use</th><th>Modified</th><th>Rows</th><th>Status</th></tr>` +
+    files.map(x=>`<tr><td>${x.name}</td><td>${x.path||'<span class="muted">'+(x.expected||x.template)+'</span>'}</td><td>${x.mtime ? dmy(x.mtime)+' '+x.mtime.slice(11,19) : ''}</td><td>${x.rows}</td><td class="${x.error?'err':x.fallback?'stale':''}">${x.error || (x.fallback?'expected '+x.expected+' not found':'ok')}</td></tr>`).join('') + `</table></div>`;
+}
+
+// ---------- tables: every table has its own column widths, a "set all widths" box and auto-fit
+const SYN = 'SYN', BOR = 'BORROW', LEN = 'LEND';   // pseudo tabs
+const isBox = x => x === BOR || x === LEN;
+S.tcols = {};                      // table key -> column ids (for "set all widths")
+const FILL = new Set(['summary','stress','board']);   // these fill their panel (auto fit) unless you set widths
+function colW(t, c){ return ((S.colw[t]||{})[c.id]) ?? ((S.autow[t]||{})[c.id]) ?? c.w; }
+// fixed widths everywhere (defaults below, or what you dragged / set / fitted)
+function isAuto(t){ return false; }
+const fitsContent = t => false;
+function rtable(t, cols, rows, rowCls, cellCls, rowAttr){
+  S.tcols[t] = cols.map(c=>c.id);
+  const auto = isAuto(t);
+  const total = cols.reduce((a,c)=>a+colW(t,c), 0);
+  const cg = auto ? '' : `<colgroup>${cols.map(c=>`<col data-c="${c.id}" style="width:${colW(t,c)}px">`).join('')}</colgroup>`;
+  return `<table class="rt ${FILL.has(t)?'fillt':''} ${auto?'auto':''} ${auto&&fitsContent(t)?'fit':''}" data-t="${t}" ${auto?'':`style="width:${total}px"`}>${cg}
+    <thead><tr>${cols.map(c=>`<th data-c="${c.id}" ${c.title?`title="${c.title}"`:''}>${c.label}<span class="rz" data-t="${t}" data-c="${c.id}" title="drag to resize · double-click: fit to content"></span></th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r=>`<tr class="${rowCls?rowCls(r):''}" ${rowAttr?rowAttr(r):''}>${cols.map(c=>`<td class="${cellCls?cellCls(r,c):''}">${c.cell(r)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+function tbar(t, extra=''){
+  const w = Object.values(S.colw[t]||{});
+  const same = w.length && w.every(x=>x===w[0]) ? w[0] : '';
+  return `Col width <input type="number" min="28" max="600" step="2" data-wt="${t}" value="${same}" placeholder="px"><button data-setw="${t}" title="set every column of this table to this width">Set all</button>
+    ${FILL.has(t)
+      ? `<button data-autofit="${t}" class="${S.colw[t]?'':'on'}" title="size the columns to their content and stretch them to fill the panel">Auto fit</button>`
+      : `<button data-fitall="${t}" title="fit every column to its current content (widths stay fixed afterwards)">Fit all</button>
+    <button data-autofit="${t}" title="back to the standard fixed widths">Default</button>`}${extra}`;
+}
+function fillTbars(){ document.querySelectorAll('[data-tbar].fill').forEach(el => { if (!el.contains(document.activeElement)) el.innerHTML = tbar(el.dataset.tbar); }); }
+
+// Greeks & P&L columns that can be shown / hidden (Columns ▾)
+const SUM_GROUPS = [['Greeks', [['delta','Delta'],['gamma','Gamma'],['vega','Vega'],['theta','Theta'],['skew','Skew'],['skew_t','Skew /√T']]],
+  ['P&L', [['ftd','FTD'],['theta_gl','Theta G/L'],['vega_gl','Vega G/L'],['delta_gl','Delta G/L'],['hedge_gl','Hedge G/L']]],
+  ['Other', [['gross','Net prem ₹Cr']]],
+  ['Margin', [['margin','Margin ₹Cr'],['margin_nd','Next-day margin ₹Cr'],['span','SPAN ₹Cr'],['exposure','Exposure ₹Cr']]]];
+const SUM_OFF = {skew:true, span:true, exposure:true};   // hidden until ticked in Columns ▾
+const sumVisible = id => id === 'name' || (S.scols[id] ?? !SUM_OFF[id]);
+function sumPicker(){
+  $('sumpick').innerHTML = SUM_GROUPS.map(([g, cs])=>`<fieldset><legend>${g}<span class="lnk" data-sgall="${g}">all</span><span class="lnk" data-sgnone="${g}">none</span></legend>
+    ${cs.map(([id,l])=>`<label><input type="checkbox" data-scol="${id}" ${sumVisible(id)?'checked':''}>${l}</label>`).join('')}</fieldset>`).join('');
+}
+function summary(s){
+  const syms = Object.keys(s.summary||{}).filter(k=>k!=='TOTAL');
+  const active = b => b.rows.some(r=>r.pos) || b.fut_qty || b.marks ||
+    Object.values(b.pnl||{}).some(x=>Math.abs(x)>0.5) || Object.values(b.stress||{}).some(x=>Math.abs(x)>0.5);
+  const expRows = sym => (s.books[sym]||[]).filter(active).map(b => ({kind:'exp', sym, exp:b.expiry, label:dmy(b.expiry), tag:b.syn_row,
+    v:{...b.totals, ...b.pnl, stress:b.stress}}));
+  const build = which => syms.flatMap(sym => {
+    const subs = expRows(sym), open = S.open[which].includes(sym);
+    return [{kind:'sym', sym, label:sym, v:s.summary[sym], n:subs.length, open}].concat(open ? subs : []);
+  }).concat([{kind:'total', label:'TOTAL', v:s.summary.TOTAL}]);
+  const name = r => r.kind==='sym' ? `<span class="caret">${r.n ? (r.open?'▼':'▶') : ''}</span>${r.label}`
+    : r.kind==='exp' ? `${r.label}<span class="tag">${r.tag||''}</span>` : r.label;
+  const cls = r => r.kind==='total' ? 'total' : r.kind==='sym' ? (r.n?'grp':'') : 'sub';
+  const attr = which => r => r.kind==='sym' && r.n ? `data-open="${which}|${r.sym}" title="click the name to show / hide the expiries"` : '';
+  const f = (id,label,fmt,w=84) => ({id, label, w, cell:r=>sgn(r.v[id],fmt)});
+  const cols = [{id:'name',label:'',w:92,cell:name}, f('delta','Delta',n0,66), f('gamma','Gamma',n2,62), f('vega','Vega',n0),
+    f('theta','Theta',n0,76),
+    {...f('skew','Skew',n2,70), title:'Nifty!J10: Σ (strike − Synthetic Future) × V(k) / 100 / 100, per expiry'},
+    {...f('skew_t','Skew /√T',n2,76), title:'Nifty!X11: Σ over expiries of Skew ÷ √(T / T of the nearest expiry held)'},
+    f('ftd','FTD',n0,92), f('theta_gl','Theta G/L',n0), f('vega_gl','Vega G/L',n0,92), f('delta_gl','Delta G/L',n0),
+    f('hedge_gl','Hedge G/L',n0,76),
+    {id:'gross',label:'Net prem ₹Cr',w:88,title:'premium received (+) / paid (−), ₹ crore · double-click to type over',cell:r=>sumCell(r,'gross')},
+    {id:'margin',label:'Margin ₹Cr',w:84,title:'SPAN + Exposure on the live positions (previous close + today\'s trades), from the daily SPAN risk file',cell:r=>mCell(r,'margin')},
+    {id:'margin_nd',label:'Next-day ₹Cr',w:88,title:'margin without the contracts that expire today',cell:r=>mCell(r,'margin_nd')},
+    {id:'span',label:'SPAN ₹Cr',w:76,title:'scan risk + calendar spread charge (or short option minimum) − net option value',cell:r=>mCell(r,'span')},
+    {id:'exposure',label:'Exposure ₹Cr',w:84,title:'gross short options × underlying × ELM % + net futures × underlying × 2 %',cell:r=>mCell(r,'exposure')}];
+  const mTip = d => !d ? '' : d.error && !d.file ? d.error : [
+    `${d.sym} · risk file ${d.file||'—'}`, `Scan risk ${n0(d.scan)}`, `Calendar spread ${n0(d.spread)}`, `Short option min ${n0(d.som)}`,
+    `SPAN requirement ${n0(d.span_req)}`, `Net option value ${n0(d.nov)}`, `SPAN margin ${n0(d.span)}`,
+    `Exposure ${n0(d.exposure)} (underlying ${n2(d.und)}; ${d.ael_legs||0} short legs at AEL %, ${d.tier_legs||0} at tier %)`,
+    `Margin ${n0(d.margin)} · next day ${n0(d.margin_nd)}`,
+    d.missing && d.missing.length ? `Not in the risk file (skipped): ${d.missing.length} – ${d.missing.slice(0,6).join(', ')}` : '',
+    d.error || ''].filter(Boolean).join('\n');
+  const mCell = (r, fld) => {
+    if (r.kind === 'exp') return '';
+    const d = r.kind === 'sym' ? (s.summary[r.sym]||{}).margin_detail : null;
+    const v = r.v[fld];
+    if (v === undefined || v === null) return d && d.error ? `<span class="muted" title="${mTip(d)}">${d.error.startsWith('no risk') ? 'no SPAN file' : '–'}</span>` : '';
+    const warn = d && d.missing && d.missing.length;
+    return `<span class="${warn?'stale':''}" title="${r.kind==='total' ? 'all indices' : mTip(d)}">${n2(v / 1e7)}</span>`;
+  };
+  // "Other" columns can be typed over (double-click), like the qty / IV marks: index and expiry rows; TOTAL adds them up
+  const SM = s.sum_marks || {};
+  const calcOf = {gross: v => -v.gross / 1e7};
+  const expVal = (sym, b, fld) => SM[`${sym}|${b.expiry}|${fld}`] ?? calcOf[fld](b.totals);
+  const symMarked = (sym, fld) => (s.books[sym]||[]).some(b => `${sym}|${b.expiry}|${fld}` in SM);
+  const symVal = (sym, fld) => SM[`${sym}|${fld}`] ?? (symMarked(sym, fld) ? (s.books[sym]||[]).reduce((a,b)=>a+expVal(sym,b,fld),0) : calcOf[fld](s.summary[sym]));
+  const sumCell = (r, fld) => {
+    if (r.kind === 'total'){ const v = syms.reduce((a,sym)=>a+symVal(sym,fld),0), any = syms.some(sym=>`${sym}|${fld}` in SM || symMarked(sym,fld));
+      return `<span class="${any?'derived':''}" title="${any?'includes typed-over values':''}">${sgn(v,n2)}</span>`; }
+    const key = r.kind === 'sym' ? r.sym : `${r.sym}|${r.exp}`;
+    const v = r.kind === 'sym' ? symVal(r.sym, fld) : SM[`${key}|${fld}`] ?? calcOf[fld](r.v);
+    const typed = `${key}|${fld}` in SM, from = r.kind === 'sym' && !typed && symMarked(r.sym, fld);
+    return `<span data-sk="${key}" data-sf="${fld}" data-calc="${calcOf[fld](r.v)}" class="${from?'derived':''}" title="${typed?'typed over · calculated '+n2(calcOf[fld](r.v)):from?'includes typed-over expiries':'double-click to type over'}">${sgn(v,n2)}</span>`;
+  };
+  const sumCls = (r, c) => c.id === 'gross' && r.kind !== 'total'
+    ? 'sedit' + ((`${r.kind==='sym'?r.sym:r.sym+'|'+r.exp}|${c.id}` in SM) ? ' marked' : '') : '';
+  { const T = s.summary.TOTAL || {}, fs = s.files || [], nse = fs.find(x => x.name === 'SPAN NSE');
+    const per = syms.filter(x => (s.summary[x]||{}).margin !== undefined).map(x => `${x} ${n2(s.summary[x].margin/1e7)} Cr (next day ${n2(s.summary[x].margin_nd/1e7)})`).join('\n');
+    const html = T.margin !== undefined
+      ? `Margin <b>₹${n2(T.margin/1e7)} Cr</b> · next day <b>₹${n2(T.margin_nd/1e7)} Cr</b>`
+      : `Margin <span class="${nse && nse.error ? 'err' : ''}">${nse ? (nse.error || 'no positions') : 'loading SPAN file…'}</span>`;
+    const mb = $('marginbadge'); if (mb && mb._h !== html){ mb.innerHTML = html; mb._h = html; }
+    if (mb) mb.title = (per ? per + '\n' : '') + 'SPAN + Exposure from ' + (nse && nse.path ? nse.path.split(/[\\/]/).pop() : 'the daily SPAN file') + ' · per-index columns at the right end of the table (Columns ▾ → Margin)'; }
+  $('summary').innerHTML = rtable('summary', cols.filter(c => sumVisible(c.id)), build('sum'), cls, sumCls, attr('sum'));
+  const nm = Object.keys(SM).length, mc = $('summarkn'); if (mc){ mc.textContent = nm ? nm + ' marked' : ''; }
+  const lab = x => { const v = Number((x*100).toPrecision(6)); return (v>0?'+':'') + v + '%'; };
+  const sh = (s.shocks||[]).slice().sort((a,b)=>a-b);
+  const keys = sh.slice().reverse().map(x=>lab(-x)).concat(sh.map(x=>lab(x)));
+  const scols = [{id:'name',label:'',w:92,cell:name}].concat(keys.map(key=>({id:key,label:key,w:62,cell:r=>sgn((r.v.stress||{})[key]/1e5,n1)})));
+  $('stress').innerHTML = rtable('stress', scols, build('str'), cls, null, attr('str'));
+}
+
+// ---------- Synthetic Future & IV: result columns + every input/parameter of the FB calculation
+const rowName = {M:'Monthly (FB rows 5-7)', W:'Weekly (FB rows 8-11)', L:'Far (FB rows 13-20)', S:'Sensex!F51 rule', '?':'Other'};
+const D = (key, f=n2) => r => f((r.d||{})[key]);
+const BOARD_COLS = [
+  // group, id, label, width, cell, title, visible by default
+  ['Result','sym','Index',96,r=>r.sym,'',1],
+  ['Result','exp','Expiry',90,r=>dmy(r.expiry),'',1],
+  ['Result','row','Row',44,r=>`<span class="tag" title="${rowName[r.row]||''}">${r.row||''}</span>`,'FB row type: M monthly, W weekly, L far, S Sensex rule',1],
+  ['Result','fwd','Synthetic Future',116,r=>`<b class="${r.fwd_src==='close'?'stale':''}">${n2(r.fwd)}</b>`,'FB!C',1],
+  ['Result','src','Method',104,r=>{ const d = r.d||{}; return d.mark_base ? `<span title="calculated: ${n2(d.calc_value)}">= ${dmy(d.mark_base)} ${d.mark_add>=0?'+':''}${n2(d.mark_add)}</span>` : r.in_feed===false && !r.fwd_src ? `<span class="err" title="Listed in the daily token file but the feed adapter has not loaded it yet: no live prices until its inputs are refreshed">not in feed</span>` : `<span class="${r.fwd_src==='close'?'stale':'muted'}">${r.fwd_src||''}</span>`; },'',1],
+  ['Result','mbase','Mark from',116,r=>{ const d = r.d||{}, cur = d.mark_base||'';
+    return `<select class="smk" data-sk="${r.sym}|${r.expiry}"><option value="">—</option>${(r.choices||[]).filter(e=>e!==r.expiry).map(e=>`<option value="${e}" ${e===cur?'selected':''}>${dmy(e)}</option>`).join('')}</select>`; },
+    'mark this Synthetic Future from a liquid expiry: pick the expiry here and the points in the next column',1],
+  ['Result','madd','± points',80,r=>{ const d = r.d||{};
+    return `<input type="number" step="any" class="smk" data-sa="${r.sym}|${r.expiry}" value="${d.mark_base?d.mark_add:''}" placeholder="0">`; },
+    'Synthetic Future = the chosen expiry\'s Synthetic Future + these points (e.g. 300 or -300); Enter to apply',1],
+  ['Result','roll','Roll',76,r=>sgn(r.roll,n2),'Synthetic Future minus the near monthly one',1],
+  ['Result','cl','Close Syn Fut',104,r=>n2(r.cl_fwd),'FB!N',1],
+  ['Result','ch','Syn Fut ch',84,r=>sgn(blank(r.fwd)||blank(r.cl_fwd)?null:r.fwd-r.cl_fwd,n2),'',1],
+  ['Result','atm','ATM',72,r=>n0(r.atm),'MROUND(Synthetic Future, Gap)',1],
+  ['Result','ce','CE bid',76,r=>n2(r.ce),'FB!E: best bid at ATM',1],
+  ['Result','pe','PE bid',76,r=>n2(r.pe),'FB!F: best bid at ATM',1],
+  ['Result','iv','IV %',64,r=>pct(r.iv),'FB!I',1],
+  ['Result','cliv','Close IV %',76,r=>pct(r.cl_iv),'FB!S',1],
+  ['Result','ivch','IV ch',64,r=>sgn(blank(r.iv_ch)?null:r.iv_ch*100,n2),'FB!K',1],
+  ['Result','str','Straddle',84,r=>n2(r.straddle),'FB!J',1],
+  ['Result','clstr','Close str.',84,r=>n2(r.cl_straddle),'FB!T',1],
+  ['Result','strch','Str. ch',76,r=>sgn(r.straddle_ch,n2),'FB!L',1],
+  ['Live calculation','gap','Gap',56,D('gap',n0),'FB!M: MROUND step for this row',0],
+  ['Live calculation','rough','Rough step',72,D('rough',n0),'MROUND step for the Temp Fut strike (500)',0],
+  ['Live calculation','nf','Near Fut LTP',96,D('near_fut'),'FB!C3: LTP of the near monthly future',0],
+  ['Live calculation','anchor','Anchor',90,D('anchor'),'value rounded for the Temp Fut strike: near future (1st row) or the previous row',0],
+  ['Live calculation','uk','Temp strike',84,D('u_k',n0),'MROUND(anchor, rough)',0],
+  ['Live calculation','uce','Temp CE',70,D('u_ce'),'CE LTP at the Temp strike',0],
+  ['Live calculation','upe','Temp PE',70,D('u_pe'),'PE LTP at the Temp strike',0],
+  ['Live calculation','U','Temp Fut',96,D('U'),'FB!U = Temp strike + CE - PE',0],
+  ['Live calculation','K','K used',72,D('K',n0),'strike of the final parity: MROUND(Temp Fut, Gap) or the tightest-spread strike',0],
+  ['Live calculation','kce','CE at K',70,D('ce'),'CE LTP (mid for min-spread rows) at K',0],
+  ['Live calculation','kpe','PE at K',70,D('pe'),'PE LTP (mid for min-spread rows) at K',0],
+  ['Live calculation','cb','CE bid',64,D('ce_bid'),'',0],
+  ['Live calculation','ca','CE ask',64,D('ce_ask'),'',0],
+  ['Live calculation','pb','PE bid',64,D('pe_bid'),'',0],
+  ['Live calculation','pa','PE ask',64,D('pe_ask'),'',0],
+  ['Live calculation','spread','Spread',64,D('spread'),'(CE ask-bid)+(PE ask-bid) of the chosen strike, or |CE-PE| for Sensex',0],
+  ['Live calculation','cand','Candidates',110,r=>{const d=r.d||{}; return blank(d.cand_from)?'':`${n0(d.cand_from)}–${n0(d.cand_to)}`;},'strikes tested for the tightest spread (FB!X5..AW5)',0],
+  ['Live calculation','X','Floor Strike',90,D('X',n0),'FB!X: listed strike below the Temp Fut',0],
+  ['Live calculation','Y','Ceil Strike',84,D('Y',n0),'FB!Y: listed strike above the Temp Fut',0],
+  ['Live calculation','cex','CE@Floor +carry',110,D('ce_x'),'FB!AS',0],
+  ['Live calculation','pex','PE@Floor',76,D('pe_x'),'FB!AT',0],
+  ['Live calculation','cey','CE@Ceil',70,D('ce_y'),'FB!AU',0],
+  ['Live calculation','pey','PE@Ceil +carry',104,D('pe_y'),'FB!AV',0],
+  ['Live calculation','Z','Floor Future',96,D('Z'),'FB!Z = Floor Strike + CE@Floor - PE@Floor',0],
+  ['Live calculation','AA','Ceil Future',96,D('AA'),'FB!AA = Ceil Strike + CE@Ceil - PE@Ceil',0],
+  ['Live calculation','int','Interest W',72,r=>{const v=(r.d||{}).interest; return blank(v)?'':(v*100).toFixed(1)+'%';},'FB!W: carry rate for far rows',0],
+  ['Live calculation','days','Days',52,D('days',n0),'expiry - today',0],
+  ['Live calculation','fut','Future LTP',90,D('fut'),'Sensex: future LTP',0],
+  ['Close calculation','nfc','Near Fut close',100,D('near_fut_cl'),'FB!V5: bhavcopy close of the near future',0],
+  ['Close calculation','vk','V strike',72,D('v_k',n0),'MROUND(previous V or N, Gap)',0],
+  ['Close calculation','vce','V CE close',80,D('v_ce_cl'),'',0],
+  ['Close calculation','vpe','V PE close',80,D('v_pe_cl'),'',0],
+  ['Close calculation','V','V (temp CL fut)',104,D('V'),'FB!V',0],
+  ['Close calculation','Kc','K close',72,D('K_cl',n0),'MROUND(V, Gap)',0],
+  ['Close calculation','cec','CE close',72,D('ce_cl'),'bhavcopy close at K close',0],
+  ['Close calculation','pec','PE close',72,D('pe_cl'),'bhavcopy close at K close',0],
+  ['Close calculation','AC','AC (floor)',72,D('AC',n0),'FB!AC',0],
+  ['Close calculation','AD','AD (ceil)',72,D('AD',n0),'FB!AD',0],
+  ['Close calculation','AE','AE',84,D('AE'),'FB!AE',0],
+  ['Close calculation','AF','AF',84,D('AF'),'FB!AF',0],
+  ['Close calculation','ovr','Override',120,r=>(r.d||{}).override||'','value typed over a formula in FB',0],
+  ['Close calculation','futc','Future close',90,D('fut_cl'),'Sensex: future close',0],
+  ['ATM IV','tiv','T days (IV)',80,r=>n2(r.t_iv),'expiry - today + day left',0],
+  ['ATM IV','civ','CE IV %',64,r=>pct(r.ce_iv),'FB!G',0],
+  ['ATM IV','piv','PE IV %',64,r=>pct(r.pe_iv),'FB!H',0],
+  ['ATM IV','clatm','Close ATM',76,r=>n0(r.cl_atm),'MROUND(Close Syn Fut, Gap)',0],
+  ['ATM IV','clce','Close CE',72,r=>n2(r.cl_ce),'FB!O',0],
+  ['ATM IV','clpe','Close PE',72,r=>n2(r.cl_pe),'FB!P',0],
+  ['ATM IV','clciv','Close CE IV %',90,r=>pct(r.cl_ce_iv),'FB!Q',0],
+  ['ATM IV','clpiv','Close PE IV %',90,r=>pct(r.cl_pe_iv),'FB!R',0],
+  ['ATM IV','tcl','T days (close)',90,r=>n2(r.t_cl),'expiry - bhavcopy date (far rows: days + 1)',0],
+].map(([group,id,label,w,cell,title,on])=>({group,id,label,w,cell,title,on}));
+function boardVisible(c){ return (S.bcols[c.id] ?? !!c.on); }
+function colPicker(){
+  const groups = [...new Set(BOARD_COLS.map(c=>c.group))];
+  $('colpick').innerHTML = groups.map(g=>`<fieldset><legend>${g}<span class="lnk" data-cgall="${g}">all</span><span class="lnk" data-cgnone="${g}">none</span></legend>
+    ${BOARD_COLS.filter(c=>c.group===g).map(c=>`<label title="${c.title||''}"><input type="checkbox" data-bcol="${c.id}" ${boardVisible(c)?'checked':''}>${c.label}</label>`).join('')}</fieldset>`).join('');
+}
+function board(s){
+  const syms = Object.keys(s.board||{});
+  const list = syms.filter(x=>S.boardSym==='ALL'||x===S.boardSym);
+  const rows = list.flatMap(sym => s.board[sym].map(r=>({sym, choices:s.board[sym].map(x=>x.expiry), ...r})));
+  const a = document.activeElement;
+  if ($('boardpane').contains(a) && a.matches('select.smk,input.smk')) return;   // don't redraw while you're picking / typing
+  $('boardpane').innerHTML = rtable('board', BOARD_COLS.filter(boardVisible), rows, null,
+    (r, c) => (r.d||{}).mark_base && ['fwd','src','mbase','madd'].includes(c.id) ? 'marked' : '');
+}
+
+function tabs(s){
+  const syms = Object.keys(s.books||{});
+  if (!S.sym || (S.sym!==SYN && !isBox(S.sym) && !syms.includes(S.sym))) S.sym = syms[0];
+  const nsm = Object.values(s.board||{}).reduce((n,rs)=>n+rs.filter(r=>(r.d||{}).mark_base).length, 0);   // Synthetic Future marks, all indices
+  const boxSyms = Object.keys(((s.box||{}).borrow)||{});
+  const opts = isBox(S.sym)
+    ? `<span class="opts">Index <select id="boxsym">${boxSyms.map(x=>`<option ${x===S.boxSym?'selected':''}>${x}</option>`).join('')}</select>
+       <span class="muted">${S.sym===BOR?'lowest annualised borrow cost':'highest annualised lend yield'} · box spreads on best bid / ask</span></span>`
+    : S.sym===SYN
+    ? `<span class="opts">Index <select id="boardsym">${['ALL',...syms].map(x=>`<option ${x===S.boardSym?'selected':''}>${x}</option>`).join('')}</select>
+       <button id="colbtn">Columns ▾</button><button id="synreset" title="clear all Synthetic Future marks (every index)">↺ Refresh</button>${nsm?`<span class="markcount">${nsm} marked</span>`:''}<span class="tbar fill" data-tbar="board"></span></span>`
+    : `<span class="opts">       <label><input type="checkbox" id="posonly" ${S.posOnly?'checked':''}> expiries with positions only</label>
+       <span>double-click a qty or IV to mark it · <span class="markcount">purple</span> = marked · italic amber = previous close</span></span>`;
+  const tabName = x => x===SYN ? 'Synthetic Future &amp; IV' : x===BOR ? 'Borrow' : x===LEN ? 'Lend' : x;
+  const html = syms.concat([SYN, BOR, LEN]).map(x=>`<span class="tab ${x===S.sym?'on':''}" data-sym="${x}" title="${tabKey(x)?'Alt+'+tabKey(x).slice(3)+' · ':''}Ctrl+PageUp / Ctrl+PageDown for previous / next tab">${tabName(x)}</span>`).join('') + opts;
+  if ($('tabs').dataset.html !== html && !$('tabs').contains(document.activeElement)){ $('tabs').innerHTML = html; $('tabs').dataset.html = html; }
+}
+
+function ivMode(key){ return S.ivmode[key] || {ce:false, pe:false}; }
+function bookCols(m){
+  // Nifty!L15 switch: CE / PE IV and IV change for the whole table; neither ticked = OTM side
+  const ch = v => sgn(blank(v)?null:v*100,n2);
+  const iv = [], ivch = [];
+  if (m.ce){ iv.push({id:'ceiv',f:'ce_iv',label:'CE IV %',w:66,cell:r=>pct(r.ce_iv)}); ivch.push({id:'ceivch',label:'CE IV ch',w:70,cell:r=>ch(r.ce_iv_ch)}); }
+  if (m.pe){ iv.push({id:'peiv',f:'pe_iv',label:'PE IV %',w:66,cell:r=>pct(r.pe_iv)}); ivch.push({id:'peivch',label:'PE IV ch',w:70,cell:r=>ch(r.pe_iv_ch)}); }
+  if (!iv.length){ iv.push({id:'iv',f:'iv',label:'IV %',w:60,cell:r=>pct(r.iv)}); ivch.push({id:'ivch',label:'IV ch',w:64,cell:r=>ch(r.iv_ch)}); }
+  return [
+    {id:'k',label:'Strike',w:96,cell:r=>`${n0(r.strike)}${r.atm?'<span class="atmtag" title="strike nearest the Synthetic Future">ATM</span>':''}${r.added&&!r.pos?'<span class="addtag" title="added with + Strike; ↺ Refresh removes it">+</span>':''}`},
+    {id:'pq',f:'pe_qty',label:'Put qty',w:70,cell:r=>qty(r.pe_qty)},
+    {id:'pp',label:'Put LTP',w:82,cell:r=>px(r.pe_px,r.pe_src)},
+    {id:'cq',f:'ce_qty',label:'Call qty',w:70,cell:r=>qty(r.ce_qty)},
+    {id:'cp',label:'Call LTP',w:82,cell:r=>px(r.ce_px,r.ce_src)},
+    ...iv,
+    {id:'v',label:'V (k)',w:66,cell:r=>r.pos?nz1(r.vega_k):''},
+    {id:'t',label:'T (k)',w:66,cell:r=>r.pos?nz1(r.theta_k):''},
+    ...ivch];
+}
+function card(b){
+  const t=b.totals, p=b.pnl;
+  const key = S.sym + '|' + b.expiry, m = ivMode(key), tk = 'book:' + key;
+  const rows = shownRows(b);
+  const cols = bookCols(m);
+  return `<h3>${dmy(b.expiry)} <span class="tag" title="FB row type">${b.syn_row||''}</span>
+      ${b.in_feed===false ? '<span class="err" title="Listed in the daily token file but not loaded by the feed adapter yet">not in feed · </span>' : ''}<span class="muted">T ${n2(b.t_days)} · Syn Fut <b class="${b.fwd_src==='close'?'stale':''}">${n2(b.fwd)}</b> · Close ${n2(b.cl_fwd)}</span>
+      <span class="ivsel" title="IV change vs previous close. Neither ticked: OTM side (put below the Synthetic Future, call above)">IV ch:
+        <label><input type="checkbox" data-iv="ce" data-key="${key}" ${m.ce?'checked':''}>CE</label>
+        <label><input type="checkbox" data-iv="pe" data-key="${key}" ${m.pe?'checked':''}>PE</label></span></h3>
+    <div class="tbar cardbar" data-tbar="${tk}">${tbar(tk, `<button data-addstrike="${key}" title="add a strike to this table (to see it or mark it)">+ Strike</button><button data-reset="${key}" title="clear the marks and added strikes: back to the strikes you hold, with formula values">↺ Refresh</button>${b.marks?`<span class="markcount">${b.marks} marked</span>`:''}${b.added?`<span class="markcount">${b.added} added</span>`:''}`)}</div>
+    <div class="cardstats">
+      <div><span>Delta</span><b>${sgn(t.delta)}</b></div><div><span>Gamma</span><b>${sgn(t.gamma,n2)}</b></div>
+      <div><span>Vega</span><b>${sgn(t.vega)}</b></div><div><span>Theta</span><b>${sgn(t.theta)}</b></div>
+      <div title="Nifty!J10: sum over strikes of (strike − Synthetic Future) × V(k) / 100, ÷ 100"><span>Skew</span><b>${sgn(t.skew,n2)}</b></div>
+      <div><span>Fut qty</span><b>${qty(b.fut_qty)||'0'}</b></div>
+      <div><span>FTD</span><b>${sgn(p.ftd)}</b></div><div><span>Theta G/L</span><b>${sgn(p.theta_gl)}</b></div>
+      <div><span>Vega G/L</span><b>${sgn(p.vega_gl)}</b></div><div><span>Delta G/L</span><b>${sgn(p.delta_gl)}</b></div>
+      <div style="grid-column:span 2"><span>Hedge G/L</span><b>${sgn(p.hedge_gl)}</b></div>
+    </div>
+    ${rtable(tk, cols, rows, r=>`${r.pos?'':'chain'} ${r.atm?'atm':''}`,
+      (r,c)=> c.f ? `edit ${(r.marked||[]).includes(c.f)?'marked':''}" data-f="${c.f}" data-k="${r.strike}" data-key="${key}" title="double-click to mark` : '')}`;
+}
+
+// expiry navigator above the position tables (replaces the scroll bar): one block per column of tables,
+// labelled with its expiries; the blue box is the part on screen - drag it, click a block, wheel over it, or ◀ ▶
+function syncTopScroll(){
+  const host = $('books'), nav = $('booksNav'), tr = $('navtrack'); if (!host || !nav) return;
+  const over = !host.hidden && host.scrollWidth > host.clientWidth + 1;
+  nav.hidden = !over; if (!over) return;
+  const W = host.scrollWidth, tw = tr.clientWidth, x0 = host.scrollLeft, x1 = x0 + host.clientWidth;
+  const cols = [...host.querySelectorAll('.bcol')], hl = host.getBoundingClientRect().left;
+  const L = c => c.getBoundingClientRect().left - hl + host.scrollLeft;   // column start inside the scroll area
+  const sig = cols.map(c => Math.round(L(c)) + ':' + c.offsetWidth + ':' + [...c.querySelectorAll('.card')].map(x=>x.id.slice(5)).join(',')).join('|') + '#' + tw;
+  if (tr.dataset.sig !== sig){
+    tr.innerHTML = cols.map(c => { const ex = [...c.querySelectorAll('.card')].map(x => dmy(x.id.slice(5)).slice(0,5));
+      return `<div class="navseg" style="left:${L(c)/W*tw}px;width:${c.offsetWidth/W*tw}px" title="${ex.join(', ')}">${ex.join(' · ')}</div>`; }).join('') + '<div class="navwin" id="navwin"></div>';
+    tr.dataset.sig = sig;
+  }
+  const w = $('navwin'); w.style.left = (x0 / W * tw) + 'px'; w.style.width = Math.max(18, host.clientWidth / W * tw) + 'px';
+  tr.querySelectorAll('.navseg').forEach((sg, i) => { const c = cols[i]; sg.classList.toggle('vis', !!c && L(c) < x1 && L(c) + c.offsetWidth > x0); });
+}
+setTimeout(() => {
+  const host = $('books'), tr = $('navtrack');
+  host.addEventListener('scroll', syncTopScroll);
+  window.addEventListener('resize', syncTopScroll);
+  let drag = null;
+  tr.addEventListener('mousedown', e => {
+    const W = host.scrollWidth, tw = tr.clientWidth;
+    if (e.target.id === 'navwin'){ drag = {x: e.clientX, s: host.scrollLeft, k: W / tw}; e.target.classList.add('drag'); e.preventDefault(); return; }
+    const r = tr.getBoundingClientRect();   // click elsewhere: centre the view there
+    host.scrollTo({left: (e.clientX - r.left) / tw * W - host.clientWidth / 2, behavior: 'smooth'});
+  });
+  document.addEventListener('mousemove', e => { if (drag) host.scrollLeft = drag.s + (e.clientX - drag.x) * drag.k; });
+  document.addEventListener('mouseup', () => { if (drag){ drag = null; const w = $('navwin'); if (w) w.classList.remove('drag'); } });
+  tr.addEventListener('wheel', e => { host.scrollLeft += (e.deltaY || e.deltaX); e.preventDefault(); }, {passive:false});
+}, 0);
+function navStep(dir){   // ◀ ▶: move to the previous / next column of tables
+  const host = $('books'), hl = host.getBoundingClientRect().left, x = host.scrollLeft;
+  const xs = [...host.querySelectorAll('.bcol')].map(c => Math.max(0, c.getBoundingClientRect().left - hl + x - 12));
+  const t = dir > 0 ? xs.find(v => v > x + 4) : [...xs].reverse().find(v => v < x - 4);
+  host.scrollTo({left: t ?? (dir > 0 ? host.scrollWidth : 0), behavior: 'smooth'});
+}
+const shownRows = b => b.rows.filter(r => r.pos || r.added || (r.marked||[]).length);   // strikes you hold + added / marked
+function books(s){
+  const host = $('books');
+  const all = (s.books[S.sym]||[]).filter(b => !S.posOnly || b.rows.some(r=>r.pos) || b.fut_qty || b.marks || b.added);
+  // expiry buttons: All + one per expiry; a chosen expiry that has gone falls back to All
+  // several expiries can be picked; none picked (or only gone ones) = All
+  const have = new Set(all.map(b => b.expiry));
+  let sel = S.exp[S.sym]; sel = (Array.isArray(sel) ? sel : (sel && sel !== 'ALL' ? [sel] : [])).filter(e => have.has(e));
+  const pick = sel.length ? sel : 'ALL';
+  const held = b => b.rows.some(r=>r.pos) || b.fut_qty;
+  const list = pick === 'ALL' ? all : all.filter(b => sel.includes(b.expiry));
+  // column length (strike rows): tables are stacked in date order while the column stays within it
+  const lens = list.map(b => Math.max(1, shownRows(b).length));
+  const auto = Math.max(1, ...lens), L = S.colLen > 0 ? S.colLen : auto;
+  const bar = `<span class="muted">Expiry</span><button class="eb ${pick==='ALL'?'on':''}" data-exp="ALL">All</button>` +
+    all.map(b => `<button class="eb ${sel.includes(b.expiry)?'on':''} ${held(b)?'':'nopos'}" data-exp="${b.expiry}" title="click to add / remove this expiry${held(b)?'':' · no position'}">${dmy(b.expiry)}<span class="tag">${b.syn_row||''}</span></button>`).join('') +
+    `<span class="muted" style="margin-left:14px" title="tables go one below another in date order while their strike rows add up to at most this; then a new column starts. Empty = the biggest table (${auto} rows)">Column length</span>` +
+    `<input type="number" min="1" step="1" class="collen" id="collen" placeholder="${auto}" value="${S.colLen||''}"><span class="muted">rows</span>`;
+  const eb = $('expbar');
+  if (eb.dataset.html !== bar && document.activeElement.id !== 'collen'){ eb.innerHTML = bar; eb.dataset.html = bar; }   // only the length box blocks a redraw
+  // group into columns, in date order
+  const cols = []; let cur = [], sum = 0;
+  list.forEach((b, i) => {
+    if (cur.length && sum + lens[i] > L){ cols.push(cur); cur = []; sum = 0; }
+    cur.push(b.expiry); sum += lens[i];
+  });
+  if (cur.length) cols.push(cur);
+  const sig = S.sym + '#' + cols.map(c => c.join(',')).join('|');
+  if (host.dataset.sig !== sig){
+    const keep = {}; host.querySelectorAll('.card').forEach(c => keep[c.id] = c);
+    host.innerHTML = cols.length ? '' : '<div class="note">No expiries to show.</div>';
+    cols.forEach(c => { const col = document.createElement('div'); col.className = 'bcol';
+      c.forEach(e => { const el = keep['card-'+e] || Object.assign(document.createElement('div'), {className:'card', id:'card-'+e}); col.appendChild(el); });
+      host.appendChild(col); });
+    host.dataset.sig = sig;
+  }
+  list.forEach(b => {
+    const el = document.getElementById('card-'+b.expiry);
+    const a = document.activeElement;   // don't redraw a card while its width box has the cursor
+    if (el && !(el.contains(a) && a.matches('input[data-wt],input[data-addk]'))) el.innerHTML = card(b);
+  });
+  syncTopScroll();
+}
+
+// ---------- Borrow / Lend tabs (BorrowLend.xlsx: Borrow, BorroB, Lend, LendB, Top Pairs, Sheet2)
+const pctf = v => blank(v) ? '' : n2(v);
+function boxSettingsBar(kind, r, P, exps){
+  const inp = (k, label, v, step, title) => `<label title="${title||''}">${label}<input type="number" step="${step}" data-bp="${k}" value="${v}"></label>`;
+  const yn = (k, v, label) => `<label>${label}<select data-bs="${k}"><option ${v==='N'?'selected':''}>N</option><option ${v==='Y'?'selected':''}>Y</option></select></label>`;
+  const slot = i => `<label>Expiry ${i+1}<select data-bx="${i}"><option value="">—</option>${exps.map(e=>`<option value="${e}" ${(r.slots||[])[i]===e?'selected':''}>${dmy(e)}</option>`).join('')}</select></label>`;
+  return `<div class="boxset" data-boxkind="${kind}">${[0,1,2].map(slot).join('')}
+    ${inp('top_n','Top N',P.top_n,1,'max 20')}
+    ${kind==='borrow' ? inp('input_borrow','Input borrow % p.a.',P.input_borrow,0.25) : inp('input_lend','Input lend % p.a.',P.input_lend,0.25)}
+    ${inp('range','Range %',+(P.range*100).toFixed(4),1,'both strikes within Future Price ± this %')}
+    <label title="fixed – not editable">Buy cost multiplier 🔒<input type="number" value="${P.multiplier}" disabled></label>
+    <label title="fixed – not editable">STT on sell legs 🔒<input type="number" value="${P.stt}" disabled></label>
+    ${yn('sq_ce', r.sq_ce, 'Squaring off short CE')}${yn('sq_pe', r.sq_pe, 'Squaring off short PE')}
+    <button data-boxreset="1" title="back to the workbook's settings">Defaults</button></div>`;
+}
+function boxCols(kind, withExp){
+  const cols = [{id:'rank',label:'Rank',w:48,cell:r=>r.rank}];
+  if (withExp) cols.push({id:'exp',label:'Expiry',w:92,cell:r=>dmy(r.expiry)});
+  return cols.concat([
+    {id:'days',label:'Days',w:48,cell:r=>r.days},
+    {id:'k1',label:'Lower strike',w:84,cell:r=>n0(r.k1)},
+    {id:'k2',label:'Higher strike',w:88,cell:r=>n0(r.k2)},
+    {id:'w',label:'Box width',w:74,cell:r=>n0(r.width)},
+    {id:'rate',label:kind==='borrow'?'Borrow cost % p.a.':'Lend yield % p.a.',w:128,cell:r=>`<b>${n2(r.rate)}</b>`},
+    {id:'diff',label:'Difference ₹',w:90,cell:r=>n2(r.diff),title:'box width − net premium (per unit)'},
+    {id:'cost',label:'Trading cost ₹',w:96,cell:r=>n2(r.cost)},
+    {id:'atin',label:'Diff @ input ₹',w:96,cell:r=>sgn(r.at_input,n2),title:kind==='borrow'?'width × input % × days/365 − trading cost':'width × input % × days/365 + trading cost'},
+    {id:'sq',label:'Squares off',w:340,title:'legs of this box that close (reduce) a live position: previous close + today\'s trades',
+      cell:r=>{ const l = r.sq||[]; return l.length ? `<span style="display:block;text-align:left" title="${l.map(x=>`${x.side} ${x.opt} ${n0(x.k)} (position ${nf0.format(x.qty)})`).join('\n')}">${l.length} leg${l.length>1?'s':''}: ${l.map(x=>`${x.side} ${x.opt} ${n0(x.k)} <span class="muted">(${qty(x.qty)})</span>`).join(' · ')}</span>` : ''; }},
+    {id:'ce1',label:kind==='borrow'?'CE bid @K1':'CE ask @K1',w:86,cell:r=>n2(r.ce1),title:kind==='borrow'?'sold':'bought'},
+    {id:'pe1',label:kind==='borrow'?'PE ask @K1':'PE bid @K1',w:86,cell:r=>n2(r.pe1),title:kind==='borrow'?'bought':'sold'},
+    {id:'ce2',label:kind==='borrow'?'CE ask @K2':'CE bid @K2',w:86,cell:r=>n2(r.ce2),title:kind==='borrow'?'bought':'sold'},
+    {id:'pe2',label:kind==='borrow'?'PE bid @K2':'PE ask @K2',w:86,cell:r=>n2(r.pe2),title:kind==='borrow'?'sold':'bought'},
+  ]);
+}
+function boxTab(s){
+  const kind = S.sym === BOR ? 'borrow' : 'lend', bx = s.box || {}, P = bx.params || {};
+  const per = bx[kind] || {}; if (!per[S.boxSym]) S.boxSym = Object.keys(per)[0] || 'NIFTY';
+  const r = per[S.boxSym]; const host = $('boxpane');
+  if (!r){ host.innerHTML = '<div class="note">No data yet.</div>'; return; }
+  if (!$('boxbody') || !$('boxsetw')){ host.innerHTML = '<div id="boxsetw"></div><div id="boxbody"></div>'; }
+  // the settings bar is replaced only when it changed and you're not typing in it; the body is never wiped here
+  const a = document.activeElement, editing = $('boxsetw').contains(a) && a.matches('.boxset input,.boxset select');
+  const bar = boxSettingsBar(kind, r, P, (bx.expiries||{})[S.boxSym]||[]);
+  if (!editing && $('boxsetw')._html !== bar){ $('boxsetw').innerHTML = bar; $('boxsetw')._html = bar; }
+  const word = kind === 'borrow' ? 'borrow cost' : 'lend yield';
+  const blocks = r.blocks || [];
+  const info = `<div class="boxinfo"><span>Future price (near ${S.boxSym} future) <b>${n2(r.future)}</b></span>
+    <span>Grid centre <b>${n0(r.center)}</b> ± ${P.each_side} × ${n0(P.step)}</span>
+    <span>L bound <b>${n2(r.lo)}</b></span><span>U bound <b>${n2(r.hi)}</b></span>
+    <span>As of <b>${dmy(s.today)}</b></span>
+    <span>CE factor <b>${r.sq_ce==='Y'?1:P.multiplier}</b> · PE factor <b>${r.sq_pe==='Y'?1:P.multiplier}</b></span></div>`;
+  const best = `<div class="boxbest">${blocks.map((b,i)=>`<div class="bb">Expiry ${i+1} · ${dmy(b.expiry)} · ${b.days} d<br>
+      best ${word} <b>${b.best==null?'–':n2(b.best)+'%'}</b> <span title="cells with all four prices">· ${b.cells} pairs priced</span></div>`).join('') || '<div class="note">Pick an expiry above.</div>'}</div>`;
+  const rk = list => list.map((p,i)=>({...p, rank:i+1}));
+  const overall = `<div class="boxsec"><h4>Overall – ${kind==='borrow'?'lowest borrow cost':'highest lend yield'} across the expiries (top ${P.top_n}, both strikes within the bounds) <span style="text-transform:none;letter-spacing:0;font-weight:500"><span class="sqkey"></span>= squares off a live position</span></h4>
+    <div class="scroll">${(r.overall||[]).length ? rtable('box:'+kind+':all', boxCols(kind, true), rk(r.overall), p => (p.sq||[]).length ? 'sqoff' : '') : '<div class="note">No priced pairs inside the bounds.</div>'}</div></div>`;
+  // build the skeleton once per (tab, index, expiries); afterwards only parts whose html changed are replaced,
+  // and the grids are updated cell by cell - so nothing jumps or loses its scroll position
+  const body = $('boxbody'), sig = kind + '|' + S.boxSym + '|' + blocks.map(b=>b.expiry).join(',');
+  if (body.dataset.sig !== sig){
+    body.innerHTML = `<div data-part="info"></div><div data-part="best"></div><div data-part="overall"></div>
+      <div class="boxsec"><h4>By expiry</h4><div class="boxexps">${blocks.map((b,i)=>`<div>
+        <div data-part="h-${i}"></div><div data-part="t-${i}"></div>
+        <div class="gridhost" id="grid-${kind}-${S.boxSym}-${b.expiry}"></div></div>`).join('')}</div></div>`;
+    body.dataset.sig = sig;
+  }
+  const put = (part, html) => { const el = body.querySelector(`[data-part="${part}"]`); if (el && el._html !== html){ el.innerHTML = html; el._html = html; } };
+  put('info', info); put('best', best); put('overall', overall);
+  blocks.forEach((b,i) => {
+    put('h-'+i, `<h4>Expiry ${i+1}: ${dmy(b.expiry)} · ${b.days} days <button data-grid="${kind}|${S.boxSym}|${b.expiry}">${S.boxGrid[kind+'|'+S.boxSym+'|'+b.expiry]?'Hide grid':'Show grid'}</button></h4>`);
+    put('t-'+i, b.top.length ? rtable('box:'+kind+':exp', boxCols(kind, false), rk(b.top), p => (p.sq||[]).length ? 'sqoff' : '') : '<div class="note">No priced pairs inside the bounds.</div>');
+    const gh = document.getElementById(`grid-${kind}-${S.boxSym}-${b.expiry}`);
+    if (gh && !S.boxGrid[kind+'|'+S.boxSym+'|'+b.expiry] && gh.innerHTML) { gh.innerHTML = ''; }
+  });
+  Object.keys(S.boxGrid).forEach(k => { const [kd, sy, ex] = k.split('|'); if (kd === kind && sy === S.boxSym) drawGrid(kd, sy, ex, r, P); });
+}
+// full grid (the Borrow / Lend sheet): row = lower strike K1, column = higher strike K2; fetched on request
+function drawGrid(kind, sym, exp, r, P){
+  const key = kind+'|'+sym+'|'+exp, c = S.boxGrid[key];
+  paintGrid(kind, sym, exp, r, P, c.data);
+  if ((!c.data || Date.now() - c.at > 2000) && !c.busy){   // refresh in the background, then repaint
+    c.busy = true;
+    fetch(`/api/boxgrid?kind=${kind}&sym=${sym}&exp=${exp}`).then(res => res.ok ? res.json() : null)
+      .then(d => { if (d){ c.data = d; c.at = Date.now(); paintGrid(kind, sym, exp, r, P, d); } }).catch(()=>{}).finally(() => c.busy = false);
+  }
+}
+function paintGrid(kind, sym, exp, r, P, g){
+  const key = kind+'|'+sym+'|'+exp, c = S.boxGrid[key] || {};
+  const el = document.getElementById(`grid-${kind}-${sym}-${exp}`); if (!el) return;
+  if (!g) { if (!el.firstChild) el.innerHTML = '<div class="note">loading grid…</div>'; return; }
+  const inb = k => r.lo == null || (k >= r.lo && k <= r.hi);
+  const top = new Set(((r.blocks||[]).find(b=>b.expiry===exp)||{top:[]}).top.map(p=>p.k1+'|'+p.k2));
+  const vals = []; g.grid.forEach((row,i)=>row.forEach((v,j)=>{ if (v!=null && inb(g.strikes[i]) && inb(g.strikes[j])) vals.push(v); }));
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const color = v => { if (v==null || !vals.length || hi===lo) return ''; let t = (v-lo)/(hi-lo); if (kind==='lend') t = 1-t;   // 0 = best
+    t = Math.max(0, Math.min(1, t)); return `background:hsla(${Math.round(140 - 140*t)},70%,45%,.28)`; };
+  const [si, sj] = c.sel || [-1, -1];
+  const info = (() => {
+    if (si < 0) return `<span class="muted">Click a cell to see its row (lower strike K1) and column (higher strike K2). Drag to select cells, Ctrl+C to copy.</span>`;
+    const k1 = g.strikes[si], k2 = g.strikes[sj], v = g.grid[si][sj];
+    const rl = (g.row_legs||[])[si] || [], cl = (g.col_legs||[])[sj] || [];
+    const lg = kind==='borrow' ? `Sell CE ${n0(k1)} @ ${n2(rl[0])} bid · Buy PE ${n0(k1)} @ ${n2(rl[1])} ask · Buy CE ${n0(k2)} @ ${n2(cl[0])} ask · Sell PE ${n0(k2)} @ ${n2(cl[1])} bid`
+                               : `Buy CE ${n0(k1)} @ ${n2(rl[0])} ask · Sell PE ${n0(k1)} @ ${n2(rl[1])} bid · Sell CE ${n0(k2)} @ ${n2(cl[0])} bid · Buy PE ${n0(k2)} @ ${n2(cl[1])} ask`;
+    return `<b>Row K1 ${n0(k1)}</b> × <b>Column K2 ${n0(k2)}</b> · width ${n0(k2-k1)} · ${kind==='borrow'?'borrow cost':'lend yield'} <b>${v==null?'–':n2(v)+' % p.a.'}</b>
+      ${top.has(k1+'|'+k2)?' · in the top '+P.top_n:''}${inb(k1)&&inb(k2)?'':' · outside the bounds'}<br><span class="muted">${lg}</span>
+      <button class="xclear" data-gsel="${key}|-1|-1">clear</button>`;
+  })();
+  const sig = g.strikes.join(',');
+  if (el.dataset.sig !== sig || !el.querySelector('table.heat')){          // first paint (or new strikes): build the table
+    el.innerHTML = `<div class="gridinfo"></div><div class="scroll gscroll" style="max-height:520px"><table class="heat" data-t="heat:${key}"><thead><tr><th>K1 \\ K2</th>${g.strikes.map(k=>`<th>${n0(k)}</th>`).join('')}</tr></thead><tbody>` +
+      g.grid.map((row,i)=>`<tr><th>${n0(g.strikes[i])}</th>${row.map((v,j)=>`<td data-gsel="${key}|${i}|${j}"></td>`).join('')}</tr>`).join('') +
+      `</tbody></table></div><div class="muted" style="font-size:11px;padding:4px 0">Row = lower strike K1, column = higher strike K2, % p.a. Green = better ${kind==='borrow'?'(cheaper)':'(higher yield)'}; outlined = in the top ${P.top_n}; faded = outside the bounds.</div>`;
+    el.dataset.sig = sig;
+    const sc = el.querySelector('.gscroll');
+    if (c.sx != null){ sc.scrollLeft = c.sx; sc.scrollTop = c.sy; }
+    sc.addEventListener('scroll', () => { c.sx = sc.scrollLeft; c.sy = sc.scrollTop; }, {passive:true});
+  }
+  // update in place: only cells whose text / class / colour changed are touched
+  const gi = el.querySelector('.gridinfo'); if (gi._html !== info){ gi.innerHTML = info; gi._html = info; }
+  const tb = el.querySelector('table.heat');
+  tb.querySelectorAll('thead th').forEach((th,j) => { if (j) th.classList.toggle('xh', j-1 === sj); });
+  tb.querySelectorAll('tbody tr').forEach((tr,i) => {
+    tr.firstElementChild.classList.toggle('xh', i === si);
+    const row = g.grid[i], k1 = g.strikes[i];
+    for (let j = 0; j < row.length; j++){
+      const td = tr.children[j+1], v = row[j], k2 = g.strikes[j], io = inb(k1) && inb(k2);
+      const txt = v==null ? '' : n2(v);
+      const cls = `${io?'':'out'} ${top.has(k1+'|'+k2)?'topn':''} ${(i===si && j===sj) ? 'xs' : (i===si || j===sj) ? 'xl' : ''}${td.classList.contains('sel')?' sel':''}`;
+      const st = io ? color(v) : '';
+      if (td.textContent !== txt) td.textContent = txt;
+      if (td.className !== cls) td.className = cls;
+      if ((td.getAttribute('style')||'') !== st) td.setAttribute('style', st);
+    }
+  });
+}
+async function boxPost(body){
+  const r = await fetch('/api/box', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok){ const j = await r.json().catch(()=>({})); alertMsg(j.error || 'could not save'); }
+}
+
+function applyMins(){
+  ['summary','stress'].forEach(k => { const sec = $('sec-'+k); if (!sec) return; sec.classList.toggle('min', !!S.mins[k]);
+    const b = sec.querySelector('[data-min]'); b.textContent = S.mins[k] ? '+' : '−'; b.title = (S.mins[k] ? 'maximise' : 'minimise') + (k==='summary' ? ' (Alt+G)' : k==='stress' ? ' (Alt+V)' : ''); });
+  // both minimised -> they sit side by side as two slim bars; one open -> it takes the full width
+  const g = document.querySelector('.grid2'); if (g) g.classList.toggle('onemin', !!S.mins.summary !== !!S.mins.stress);
+}
+// ---------- Excel-style selection on any table: drag over cells, Shift+click to extend, Ctrl+C (or Copy) copies
+// as tab-separated text, Esc clears. The bar at the bottom right shows Count / Sum / Average / Min / Max.
+S.selx = null;
+const selTables = t => document.querySelectorAll(`table[data-t="${CSS.escape(t)}"]`);
+function selCellAt(td){
+  const tb = td.closest('table[data-t]'); if (!tb || !tb.tBodies[0] || !tb.tBodies[0].contains(td)) return null;
+  const tr = td.parentElement;
+  return {t: tb.dataset.t, i: [...selTables(tb.dataset.t)].indexOf(tb), r: [...tb.tBodies[0].rows].indexOf(tr), c: [...tr.children].indexOf(td)};
+}
+function selCells(){
+  const x = S.selx; if (!x) return [];
+  const tb = selTables(x.t)[x.i]; if (!tb || !tb.tBodies[0]) return [];
+  const rows = tb.tBodies[0].rows, out = [];
+  for (let r = Math.min(x.r1, x.r2); r <= Math.max(x.r1, x.r2); r++){
+    const row = rows[r]; if (!row) continue; const line = [];
+    for (let c = Math.min(x.c1, x.c2); c <= Math.max(x.c1, x.c2); c++){ const cell = row.children[c]; if (cell && cell.tagName === 'TD') line.push(cell); }
+    out.push(line);
+  }
+  return out;
+}
+const selNum = t => { const v = t.replace(/[,\s%₹]/g, '').replace(/−/g, '-'); return /^[-+]?\d*\.?\d+$/.test(v) ? Number(v) : null; };
+function applySel(){
+  document.querySelectorAll('td.sel').forEach(td => td.classList.remove('sel'));
+  const lines = selCells(), bar = $('selbar');
+  if (!lines.length){ bar.hidden = true; return; }
+  const nums = [];
+  lines.forEach(l => l.forEach(td => { td.classList.add('sel'); const v = selNum(td.textContent.trim()); if (v !== null && td.textContent.trim() !== '') nums.push(v); }));
+  const n = lines.reduce((a, l) => a + l.length, 0), sum = nums.reduce((a, b) => a + b, 0);
+  const f = v => new Intl.NumberFormat('en-IN', {maximumFractionDigits: 4}).format(v);
+  bar.innerHTML = `<span>Count <b>${n}</b></span>` + (nums.length ? `<span>Sum <b>${f(sum)}</b></span><span>Average <b>${f(sum / nums.length)}</b></span>
+    <span>Min <b>${f(Math.min(...nums))}</b></span><span>Max <b>${f(Math.max(...nums))}</b></span>` : '') +
+    `<button id="selcopy" title="copy as tab-separated text (Ctrl+C)">Copy</button><button id="selclear" title="Esc">✕</button>`;
+  bar.hidden = false;
+}
+function selCopy(){
+  const text = selCells().map(l => l.map(td => { const t = td.textContent.trim(), v = selNum(t); return v !== null && t !== '' ? String(v) : t; }).join('\t')).join('\n');
+  if (!text) return;
+  const done = () => { const b = $('selcopy'); if (b){ b.textContent = 'Copied'; setTimeout(() => { const c = $('selcopy'); if (c) c.textContent = 'Copy'; }, 1200); } };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done).catch(() => {});
+  else { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px';
+    document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch(e) {} ta.remove(); }
+}
+document.addEventListener('mousedown', e => {
+  if (e.button !== 0 || e.target.closest('#selbar')) return;
+  const td = e.target.closest('td');
+  if (!td || e.target.closest('input,select,button,a,.rz,textarea')){ if (!e.target.closest('input,select,button,textarea,.rz')){ S.selx = null; applySel(); } return; }
+  const p = selCellAt(td); if (!p || p.r < 0){ S.selx = null; applySel(); return; }
+  if (e.shiftKey && S.selx && S.selx.t === p.t && S.selx.i === p.i){ S.selx.r2 = p.r; S.selx.c2 = p.c; }
+  else S.selx = {t: p.t, i: p.i, r1: p.r, c1: p.c, r2: p.r, c2: p.c};
+  S.selDrag = true; document.body.classList.add('selecting'); e.preventDefault();
+  applySel();
+});
+document.addEventListener('mouseover', e => {
+  if (!S.selDrag) return;
+  const td = e.target.closest('td'); if (!td) return;
+  const p = selCellAt(td); if (!p || p.t !== S.selx.t || p.i !== S.selx.i || p.r < 0) return;
+  if (S.selx.r2 !== p.r || S.selx.c2 !== p.c){ S.selx.r2 = p.r; S.selx.c2 = p.c; applySel(); }
+});
+// ---------- keyboard shortcuts: Alt + letter switches tabs, Alt+G / Alt+V minimise the two top tables
+const KEYTABS = {KeyN:'NIFTY', KeyB:'BANKNIFTY', KeyS:'SENSEX', KeyF:SYN, KeyR:BOR, KeyL:LEN};
+const KEYMIN = {KeyG:'summary', KeyV:'stress'};
+const tabKey = x => Object.keys(KEYTABS).find(k => KEYTABS[k] === x);
+window.addEventListener('keydown', e => {
+  // left Alt or right Alt (AltGr reports Ctrl+Alt on Windows); letter from the key position, or the character
+  const altgr = e.getModifierState && e.getModifierState('AltGraph');
+  if (!(e.altKey || altgr) || e.metaKey || e.shiftKey || (e.ctrlKey && !altgr && !e.altKey)) return;
+  const code = /^Key[A-Z]$/.test(e.code || '') ? e.code : (e.key && e.key.length === 1 ? 'Key' + e.key.toUpperCase() : '');
+  const tab = KEYTABS[code], min = KEYMIN[code];
+  if (!tab && !min) return;
+  e.preventDefault(); e.stopPropagation();              // also stops the browser's own Alt+F menu
+  if (e.target.matches && e.target.matches('input,textarea') && document.activeElement) document.activeElement.blur();
+  if (tab){ if (tab === S.sym) return; S.sym = tab; store('wg-sym', S.sym); render(); }
+  else { S.mins[min] = !S.mins[min]; store('wg-mins', JSON.stringify(S.mins)); applyMins(); render(); }
+}, true);
+window.addEventListener('keyup', e => { if (e.key === 'Alt') e.preventDefault(); }, true);   // keep focus on the page after Alt
+document.addEventListener('mouseup', () => { if (S.selDrag){ S.selDrag = false; document.body.classList.remove('selecting'); } });
+document.addEventListener('keydown', e => {
+  const typing = e.target.matches && e.target.matches('input,textarea,select');
+  if (!S.selx || typing) return;
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C') && !String(window.getSelection())){ selCopy(); e.preventDefault(); }
+  if (e.key === 'Escape'){ S.selx = null; applySel(); }
+});
+document.addEventListener('click', e => {
+  if (e.target.id === 'selcopy') selCopy();
+  if (e.target.id === 'selclear'){ S.selx = null; applySel(); }
+});
+
+function render(){
+  const s = S.snap; if (!s || S.drag || S.editing) return;
+  applyMins();
+  header(s);
+  const msg = (S.msg && S.msg.until > Date.now()) ? S.msg.text : '';
+  if (s.page_version){ if (S.pageVer && S.pageVer !== s.page_version){ location.reload(); return; } S.pageVer = s.page_version; }
+  const rst = s.restart_needed ? 'The app was updated: close the run.bat window and start it again to use the new version.' : '';
+  $('waiting').hidden = !(s.waiting || msg || rst); $('waiting').textContent = msg || rst || s.waiting || '';
+  $('waiting').classList.toggle('err', !!rst && !msg);
+  if (!s.books || !(s.summary && s.summary.TOTAL)) return;   // still loading (e.g. feed not reachable yet)
+  summary(s); tabs(s);
+  const syn = S.sym === SYN, bx = isBox(S.sym);
+  $('books').hidden = syn || bx; $('expbar').hidden = syn || bx; $('boardpane').hidden = !syn; $('boxpane').hidden = !bx;
+  if (syn || bx) $('booksNav').hidden = true;
+  if (!syn) $('colpick').classList.remove('open');
+  if (syn) board(s); else if (bx) boxTab(s); else books(s);
+  fillTbars();
+  FILL.forEach(autoFit);
+  if (S.selx) applySel();
+}
+
+// ---------- column resize: drag a header edge; auto-fit tables freeze their current widths first
+let lastDown = {t:null, c:null, at:0};
+document.addEventListener('mousedown', e => {
+  const h = e.target.closest('.rz'); if (!h) return;
+  e.preventDefault();
+  const t = h.dataset.t, c = h.dataset.c, now = Date.now();
+  // second press on the same edge within 450 ms = double-click: fit that column to its content
+  if (lastDown.t === t && lastDown.c === c && now - lastDown.at < 450){ lastDown = {t:null, c:null, at:0}; fitCols(t, [c]); return; }
+  lastDown = {t, c, at:now};
+  const col = document.querySelector(`table.rt[data-t="${CSS.escape(t)}"] col[data-c="${CSS.escape(c)}"]`);
+  if (!col) return;
+  if (!S.colw[t]){ const fz = S.colw[t] = {};
+    col.parentElement.querySelectorAll('col').forEach(x => fz[x.dataset.c] = Math.round(parseFloat(x.style.width))); }
+  S.drag = {t, c, x:e.clientX, w:parseFloat(col.style.width), moved:false, z:zoomOf(col.closest('table'))};
+  document.body.classList.add('resizing');
+});
+function applyW(t){
+  document.querySelectorAll(`table.rt[data-t="${CSS.escape(t)}"]`).forEach(tb => {
+    tb.querySelectorAll('col').forEach(c => { const w = (S.colw[t]||{})[c.dataset.c]; if (w) c.style.width = w + 'px'; });
+    tb.style.width = [...tb.querySelectorAll('col')].reduce((a,x)=>a+parseFloat(x.style.width),0) + 'px';
+  });
+}
+document.addEventListener('mousemove', e => {
+  const d = S.drag; if (!d) return;
+  if (Math.abs(e.clientX - d.x) < 2 && !d.moved) return;
+  d.moved = true;
+  (S.colw[d.t] = S.colw[d.t] || {})[d.c] = Math.max(28, Math.round(d.w + (e.clientX - d.x) / (d.z || 1)));
+  applyW(d.t);
+});
+const saveW = () => store('wg-colw', JSON.stringify(S.colw));
+document.addEventListener('mouseup', () => {
+  if (!S.drag) return;
+  const moved = S.drag.moved;
+  S.drag = null; document.body.classList.remove('resizing');
+  if (moved){ saveW(); render(); }
+});
+document.addEventListener('dblclick', e => {
+  const h = e.target.closest('.rz');
+  if (h) return;   // handled in mousedown (double-press on the same edge fits the column)
+  const td = e.target.closest('td.edit'); if (td) startEdit(td);
+  const st = e.target.closest('td.sedit'); if (st) startSumEdit(st);
+});
+
+// ---------- fit columns to their content (like Excel's double-click on a column edge); widths stay fixed
+// width the cell's content needs, measured on the real cell: the span from the left edge of its
+// first piece of text/badge to the right edge of its last one (the resize handle is skipped),
+// so the column's current width never feeds back into the result
+// on-screen size / layout size of an element: the page zoom (S.zoom, CSS zoom) makes rects smaller or
+// larger than the CSS px that column widths are set in, so measured widths are divided by this
+const zoomOf = el => { const w = el && el.offsetWidth; return w ? (el.getBoundingClientRect().width / w) || 1 : 1; };
+function naturalWidth(cell){
+  let lo = Infinity, hi = -Infinity;
+  const add = r => { if (r.width > 0){ lo = Math.min(lo, r.left); hi = Math.max(hi, r.right); } };
+  const walk = el => el.childNodes.forEach(n => {
+    if (n.nodeType === 3){ if (n.textContent.trim()){ const r = document.createRange(); r.selectNodeContents(n); [...r.getClientRects()].forEach(add); } }
+    else if (n.nodeType === 1 && !n.classList.contains('rz')){
+      const d = getComputedStyle(n).display;
+      if (d.startsWith('inline') || n.tagName === 'INPUT' || n.tagName === 'SELECT'){ [...n.getClientRects()].forEach(add); walk(n); } else walk(n);
+    }
+  });
+  walk(cell);
+  const cs = getComputedStyle(cell);
+  return (hi > lo ? (hi - lo) / zoomOf(cell) : 0) + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + 2;
+}
+function fitCols(t, ids){
+  const tb = document.querySelector(`table.rt[data-t="${CSS.escape(t)}"]`); if (!tb) return;
+  const heads = [...tb.querySelectorAll('thead th')];
+  const cur = S.colw[t] = S.colw[t] || {};
+  tb.querySelectorAll('col').forEach(c => { if (cur[c.dataset.c] === undefined) cur[c.dataset.c] = Math.round(parseFloat(c.style.width)); });
+  (ids || heads.map(h=>h.dataset.c)).forEach(id => {
+    const idx = heads.findIndex(h => h.dataset.c === id); if (idx < 0) return;
+    let w = naturalWidth(heads[idx]);
+    tb.querySelectorAll('tbody tr').forEach(tr => { const td = tr.children[idx]; if (td) w = Math.max(w, naturalWidth(td)); });
+    cur[id] = Math.max(28, Math.ceil(w));
+  });
+  saveW(); applyW(t);
+}
+
+// ---------- auto fit (Greeks & P&L, VAR Summary, Synthetic Future & IV): columns sized to their content,
+// then stretched to fill the panel. Widths are worked out once and kept, and only redone when the panel
+// width, the columns or the rows change, or a value no longer fits - so they don't wobble with every tick.
+function autoFit(t){
+  if (!FILL.has(t) || S.colw[t]) return;
+  const tb = document.querySelector(`table.rt[data-t="${CSS.escape(t)}"]`); if (!tb) return;
+  const avail = tb.parentElement.clientWidth; if (!avail) return;
+  const cols = [...tb.querySelectorAll('col')], ids = cols.map(c=>c.dataset.c);
+  const sig = `${avail}|${ids.join()}|${tb.tBodies[0].rows.length}`;
+  const a = S.autow[t];
+  if (a && a._sig === sig && ![...tb.querySelectorAll('td')].some(c => c.scrollWidth > c.clientWidth)) return;
+  const heads = [...tb.querySelectorAll('thead th')];
+  const need = heads.map((h,i) => { let w = naturalWidth(h);
+    for (const tr of tb.tBodies[0].rows){ const td = tr.children[i]; if (td) w = Math.max(w, naturalWidth(td)); }
+    return Math.max(28, Math.ceil(w)); });
+  const sum = need.reduce((x,y)=>x+y, 0);
+  let w = need;
+  if (sum < avail){ const k = avail / sum; w = need.map(x => Math.floor(x * k)); w[w.length-1] += avail - w.reduce((x,y)=>x+y, 0); }
+  const o = S.autow[t] = {_sig: sig};
+  ids.forEach((id,i) => { o[id] = w[i]; cols[i].style.width = w[i] + 'px'; });
+  tb.style.width = w.reduce((x,y)=>x+y, 0) + 'px';
+}
+let _rsz = null;
+window.addEventListener('resize', () => { clearTimeout(_rsz); _rsz = setTimeout(render, 120); });
+
+// ---------- marking: double-click a qty / IV cell, type, Enter (empty = remove the mark), Esc = cancel
+function startEdit(td){
+  if (td.classList.contains('editing')) return;
+  S.editing = true;
+  const f = td.dataset.f, isIv = f.endsWith('iv');
+  const raw = td.textContent.replace(/,/g,'').trim();
+  td.classList.add('editing');
+  td.innerHTML = `<input type="text" inputmode="decimal" value="${raw}" placeholder="${isIv?'IV %':'qty'}">`;
+  const inp = td.querySelector('input'); inp.focus(); inp.select();
+  let done = false;
+  const finish = async (commit) => {
+    if (done) return; done = true;
+    S.editing = false;
+    const typed = inp.value; inp.blur(); td.classList.remove('editing'); td.textContent = typed;
+    if (commit){
+      const txt = typed.replace(/,/g,'').trim();
+      let value = txt === '' ? null : Number(txt);
+      if (value !== null && Number.isNaN(value)){ alertMsg('Not a number: ' + txt); render(); return; }
+      if (value !== null && isIv) value = value / 100;
+      const [sym, exp] = td.dataset.key.split('|');
+      const r = await fetch('/api/mark', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({sym, exp, strike:Number(td.dataset.k), field:f, value})});
+      if (!r.ok){ const j = await r.json().catch(()=>({})); alertMsg(j.error || 'mark failed'); }
+    }
+    render();
+  };
+  inp.addEventListener('keydown', ev => { if (ev.key==='Enter') finish(true); if (ev.key==='Escape') finish(false); });
+  inp.addEventListener('blur', () => finish(true));
+}
+// Synthetic Future mark: Mark from (expiry) + ± points; sent when either changes (Enter / leaving the box)
+async function synMark(el){
+  const key = el.dataset.sk || el.dataset.sa, [sym, exp] = key.split('|');
+  const tr = el.closest('tr');
+  const base = tr.querySelector('select.smk').value, add = tr.querySelector('input.smk').value;
+  const r = await fetch('/api/synmark', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({sym, exp, base, add: add === '' ? 0 : Number(add)})});
+  if (!r.ok){ const j = await r.json().catch(()=>({})); alertMsg(j.error || 'mark failed'); }
+  el.blur(); render();
+}
+// type over a Greeks & P&L cell (Other columns): Enter saves, empty = back to the calculated value, Esc cancels
+function startSumEdit(td){
+  const sp = td.querySelector('[data-sk]'); if (!sp || td.classList.contains('editing')) return;
+  S.editing = true; td.classList.add('editing');
+  const raw = sp.textContent.replace(/,/g,'').trim();
+  td.innerHTML = `<input type="text" inputmode="decimal" value="${raw}" placeholder="${n2(+sp.dataset.calc)}">`;
+  const inp = td.querySelector('input'); inp.focus(); inp.select();
+  let done = false;
+  const finish = async commit => {
+    if (done) return; done = true; S.editing = false; inp.blur(); td.classList.remove('editing');
+    if (commit){
+      const txt = inp.value.replace(/,/g,'').trim();
+      if (txt !== '' && Number.isNaN(Number(txt))){ alertMsg('Not a number: ' + txt); render(); return; }
+      const r = await fetch('/api/summark', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({key: sp.dataset.sk, field: sp.dataset.sf, value: txt === '' ? null : Number(txt)})});
+      if (!r.ok){ const j = await r.json().catch(()=>({})); alertMsg(j.error || 'mark failed'); }
+    }
+    render();
+  };
+  inp.addEventListener('keydown', ev => { if (ev.key==='Enter') finish(true); if (ev.key==='Escape') finish(false); });
+  inp.addEventListener('blur', () => finish(true));
+}
+function alertMsg(t){ S.msg = {text:t, until:Date.now()+5000}; $('waiting').hidden = false; $('waiting').textContent = t; }
+
+document.addEventListener('click', async e => {
+  const t = e.target.closest('.tab'); if (t){ S.sym = t.dataset.sym; store('wg-sym',S.sym); render(); return; }
+  if (e.target.closest('#feedpill')) $('feeddrawer').classList.toggle('open');
+  if (e.target.closest('#filepill')) $('filedrawer').classList.toggle('open');
+  if (e.target.id === 'synreset'){ e.target.blur(); await fetch('/api/synmark/reset', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({sym: 'ALL'})}); render(); return; }
+  if (e.target.id === 'colbtn'){ colPicker(); $('colpick').classList.toggle('open'); }
+  if (e.target.id === 'sumreset'){ e.target.blur(); await fetch('/api/summark', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({reset: true})}); render(); return; }
+  if (e.target.id === 'sumcolbtn'){ sumPicker(); $('sumpick').classList.toggle('open'); }
+  const sga = e.target.closest('[data-sgall]'), sgn_ = e.target.closest('[data-sgnone]');
+  if (sga || sgn_){ const g = (sga||sgn_).dataset.sgall || (sga||sgn_).dataset.sgnone;
+    SUM_GROUPS.find(x=>x[0]===g)[1].forEach(([id]) => S.scols[id] = !!sga); store('wg-scols', JSON.stringify(S.scols)); sumPicker(); render(); }
+  const sw = e.target.closest('[data-setw]');
+  if (sw){ const t = sw.dataset.setw, v = Number(document.querySelector(`input[data-wt="${CSS.escape(t)}"]`).value);
+    if (v >= 28){ S.colw[t] = {}; (S.tcols[t]||[]).forEach(c => S.colw[t][c] = v); saveW(); document.activeElement.blur(); render(); } }
+  const af = e.target.closest('[data-autofit]'); if (af){ delete S.colw[af.dataset.autofit]; delete S.autow[af.dataset.autofit]; saveW(); render(); }
+  const op = e.target.closest('tr[data-open]');
+  if (op && !e.target.closest('.rz') && e.target.closest('td') === op.firstElementChild){ const [w, sym] = op.dataset.open.split('|'), l = S.open[w];
+    S.open[w] = l.includes(sym) ? l.filter(x=>x!==sym) : l.concat([sym]); store('wg-open', JSON.stringify(S.open)); render(); }
+  const fa = e.target.closest('[data-fitall]'); if (fa) fitCols(fa.dataset.fitall);
+  const eb = e.target.closest('[data-exp]');
+  if (eb){ const e = eb.dataset.exp, x = S.exp[S.sym], cur = Array.isArray(x) ? x : (x && x !== 'ALL' ? [x] : []);
+    S.exp[S.sym] = e === 'ALL' ? [] : (cur.includes(e) ? cur.filter(x => x !== e) : cur.concat([e]));   // toggle; All clears
+    store('wg-exp', JSON.stringify(S.exp)); eb.blur(); render(); return; }
+  const gs = e.target.closest('[data-gsel]');
+  if (gs){ const p = gs.dataset.gsel.split('|'), key = p.slice(0,3).join('|'), i = +p[3], j = +p[4], c = S.boxGrid[key];
+    if (c){ c.sel = (i < 0 || (c.sel && c.sel[0]===i && c.sel[1]===j)) ? null : [i, j];      // click again to clear
+      const r = ((S.snap.box||{})[p[0]]||{})[p[1]]; if (r) paintGrid(p[0], p[1], p[2], r, S.snap.box.params, c.data); }
+    return; }
+  const gb = e.target.closest('[data-grid]');
+  if (gb){ const k = gb.dataset.grid; if (S.boxGrid[k]) delete S.boxGrid[k]; else S.boxGrid[k] = {}; gb.blur(); render(); return; }
+  if (e.target.closest('[data-boxreset]')){ await boxPost({reset: true}); render(); return; }
+  const nv = e.target.closest('[data-nav]'); if (nv){ navStep(+nv.dataset.nav); nv.blur(); return; }
+  const mt = e.target.closest('[data-min]');
+  if (mt){ const k = mt.dataset.min; S.mins[k] = !S.mins[k]; store('wg-mins', JSON.stringify(S.mins)); mt.blur(); applyMins(); render(); return; }
+  const ad = e.target.closest('[data-addstrike]');
+  if (ad){ const inp = document.createElement('input');
+    inp.type = 'number'; inp.className = 'addk'; inp.placeholder = 'strike'; inp.dataset.addk = ad.dataset.addstrike;
+    inp.title = 'type a strike and press Enter (Esc to cancel)'; ad.replaceWith(inp); inp.focus();
+    inp.addEventListener('keydown', async ev => {
+      if (ev.key === 'Escape'){ inp.blur(); render(); }
+      if (ev.key !== 'Enter') return;
+      const k = Number(inp.value), [sym, exp] = inp.dataset.addk.split('|');
+      if (!(k > 0)){ alertMsg('Type a strike, e.g. 22500'); return; }
+      const r = await fetch('/api/mark', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({sym, exp, strike:k, field:'add', value:1})});
+      if (!r.ok){ const j = await r.json().catch(()=>({})); alertMsg(j.error || 'could not add the strike'); return; }
+      inp.blur(); render();
+    });
+    inp.addEventListener('blur', () => setTimeout(render, 0));
+    return; }
+  const rs = e.target.closest('[data-reset]');
+  if (rs){ const [sym, exp] = rs.dataset.reset.split('|');
+    await fetch('/api/marks/reset', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({sym, exp})}); }
+  const all = e.target.closest('[data-cgall]'), none = e.target.closest('[data-cgnone]');
+  if (all || none){ const g = (all||none).dataset.cgall || (all||none).dataset.cgnone;
+    BOARD_COLS.filter(c=>c.group===g).forEach(c => S.bcols[c.id] = !!all); store('wg-bcols', JSON.stringify(S.bcols)); colPicker(); render(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.matches && e.target.matches('input.smk')){ synMark(e.target); return; }
+  if (e.key === 'Enter' && e.target.dataset && e.target.dataset.wt){ document.querySelector(`[data-setw="${CSS.escape(e.target.dataset.wt)}"]`).click(); }
+});
+document.addEventListener('change', async e => {
+  if (e.target.id==='collen'){ S.colLen = Math.max(0, Math.round(Number(e.target.value)||0)); store('wg-collen', String(S.colLen)); e.target.blur(); render(); }
+  if (e.target.matches && e.target.matches('select.smk,input.smk')) synMark(e.target);
+  if (e.target.id==='boxsym'){ S.boxSym = e.target.value; store('wg-boxsym', S.boxSym); e.target.blur(); render(); }
+  const bset = e.target.closest && e.target.closest('.boxset');
+  if (bset){ const kind = bset.dataset.boxkind, t = e.target;
+    if (t.dataset.bp){ let v = Number(t.value); if (t.dataset.bp === 'range') v = v / 100; await boxPost({params: {[t.dataset.bp]: v}}); }
+    if (t.dataset.bs) await boxPost({kind, sym: S.boxSym, [t.dataset.bs]: t.value});
+    if (t.dataset.bx !== undefined){ const sl = [...bset.querySelectorAll('select[data-bx]')].map(x => x.value); await boxPost({kind, sym: S.boxSym, expiries: sl}); }
+    t.blur(); render(); }
+  if (e.target.id==='posonly'){ S.posOnly = e.target.checked; store('wg-posonly', S.posOnly?'1':'0'); render(); }
+  if (e.target.id==='boardsym'){ S.boardSym = e.target.value; render(); }
+  if (e.target.dataset && e.target.dataset.scol){ S.scols[e.target.dataset.scol] = e.target.checked; store('wg-scols', JSON.stringify(S.scols)); render(); }
+  if (e.target.dataset && e.target.dataset.bcol){ S.bcols[e.target.dataset.bcol] = e.target.checked; store('wg-bcols', JSON.stringify(S.bcols)); render(); }
+  if (e.target.dataset && e.target.dataset.iv){ const k = e.target.dataset.key, m = {...ivMode(k)};
+    m[e.target.dataset.iv] = e.target.checked; S.ivmode[k] = m; store('wg-ivmode', JSON.stringify(S.ivmode)); render(); }
+});
+$('reload').onclick = () => fetch('/api/reload',{method:'POST'});
+$('theme').onclick = () => { const cur = document.documentElement.dataset.theme ||
+    (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  const nxt = cur==='dark'?'light':'dark'; document.documentElement.dataset.theme = nxt; store('wg-theme', nxt); };
+
+// ---------- Save layout to ui_state.json (next to the EXE) so it survives restarts ----------
+function collectUiState(){
+  return {
+    theme: document.documentElement.dataset.theme || '',
+    sym: S.sym,
+    boardSym: S.boardSym,
+    boxSym: S.boxSym,
+    posOnly: !!S.posOnly,
+    ivmode: S.ivmode,
+    colw: S.colw,
+    bcols: S.bcols,
+    scols: S.scols,
+    open: S.open,
+    exp: S.exp,
+    mins: S.mins,
+    colLen: S.colLen,
+    zoom: S.zoom,
+  };
+}
+function applyUiState(u){
+  if (!u || typeof u !== 'object') return;
+  if (u.theme) document.documentElement.dataset.theme = u.theme;
+  if (u.sym) S.sym = u.sym;
+  if (u.boardSym) S.boardSym = u.boardSym;
+  if (u.boxSym) S.boxSym = u.boxSym;
+  if (typeof u.posOnly === 'boolean') S.posOnly = u.posOnly;
+  if (u.ivmode && typeof u.ivmode === 'object') S.ivmode = u.ivmode;
+  if (u.colw && typeof u.colw === 'object') S.colw = u.colw;
+  if (u.bcols && typeof u.bcols === 'object') S.bcols = u.bcols;
+  if (u.scols && typeof u.scols === 'object') S.scols = u.scols;
+  if (u.open && typeof u.open === 'object') S.open = Object.assign(S.open, u.open);
+  if (u.exp && typeof u.exp === 'object') S.exp = u.exp;
+  if (u.mins && typeof u.mins === 'object') S.mins = u.mins;
+  if (typeof u.colLen === 'number') S.colLen = u.colLen;
+  if (typeof u.zoom === 'number') S.zoom = Math.min(200, Math.max(50, u.zoom));
+  // mirror into localStorage so same session stays consistent
+  try {
+    if (u.theme) store('wg-theme', u.theme);
+    if (u.sym) store('wg-sym', u.sym);
+    store('wg-posonly', S.posOnly ? '1' : '0');
+    store('wg-ivmode', JSON.stringify(S.ivmode));
+    store('wg-colw', JSON.stringify(S.colw));
+    store('wg-bcols', JSON.stringify(S.bcols));
+    store('wg-scols', JSON.stringify(S.scols));
+    store('wg-open', JSON.stringify(S.open));
+    store('wg-exp', JSON.stringify(S.exp));
+    store('wg-mins', JSON.stringify(S.mins));
+    store('wg-collen', String(S.colLen || 0));
+    store('wg-zoom', String(S.zoom));
+    store('wg-boxsym', S.boxSym || 'NIFTY');
+  } catch(e) {}
+}
+async function saveUiState(btn){
+  const body = collectUiState();
+  try {
+    const r = await fetch('/api/ui_state', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    if (!r.ok){ const j = await r.json().catch(()=>({})); alertMsg(j.error || 'could not save'); return; }
+    if (btn){ const t = btn.textContent; btn.textContent = 'Saved'; setTimeout(() => { btn.textContent = t; }, 1200); }
+  } catch(e) { alertMsg('could not save: ' + e); }
+}
+$('saveui').onclick = () => saveUiState($('saveui'));
+// Load saved layout from the server (file next to the EXE) after localStorage defaults
+(async () => {
+  try {
+    const r = await fetch('/api/ui_state');
+    if (r.ok) {
+      const u = await r.json();
+      if (u && Object.keys(u).length) {
+        applyUiState(u);
+        applyZoom();
+        applyMins();
+        if (S.snap) render();
+      }
+    }
+  } catch(e) {}
+})();
+
+// ---------- page zoom (Excel-style) ----------
+function applyZoom(){
+  const z = S.zoom;
+  document.documentElement.style.zoom = z / 100;
+  const el = $('zoompct'); if (el) el.textContent = z + '%';
+  store('wg-zoom', String(z));
+}
+function bumpZoom(dir){
+  const steps = [50,60,70,80,90,100,110,120,130,140,150,175,200];
+  let i = steps.findIndex(v => v >= S.zoom);
+  if (i < 0) i = steps.length - 1;
+  if (dir > 0) i = Math.min(steps.length - 1, i + (steps[i] === S.zoom ? 1 : 0));
+  else i = Math.max(0, i - (steps[i] === S.zoom ? 1 : 0) - (steps[i] > S.zoom ? 1 : 0));
+  S.zoom = steps[Math.max(0, Math.min(steps.length - 1, i))];
+  applyZoom();
+}
+$('zoomin').onclick = () => bumpZoom(1);
+$('zoomout').onclick = () => bumpZoom(-1);
+$('zoompct').onclick = () => { S.zoom = 100; applyZoom(); };
+applyZoom();
+
+// ---------- keyboard shortcuts help ----------
+$('keyshelp').onclick = e => {
+  e.stopPropagation();
+  $('keysdrawer').classList.toggle('open');
+};
+document.addEventListener('click', e => {
+  if (!$('keysdrawer').contains(e.target) && e.target.id !== 'keyshelp')
+    $('keysdrawer').classList.remove('open');
+});
+
+// ---------- Tab cycle (Ctrl+PageUp / Ctrl+PageDown); Alt+letter keys are handled above ----------
+function tabOrder(){
+  const syms = Object.keys((S.snap && S.snap.books) || {});
+  return syms.concat([SYN, BOR, LEN]);
+}
+function switchTab(dir){
+  const order = tabOrder();
+  if (!order.length) return;
+  let i = order.indexOf(S.sym);
+  if (i < 0) i = 0;
+  i = (i + dir + order.length) % order.length;
+  S.sym = order[i];
+  store('wg-sym', S.sym);
+  render();
+}
+document.addEventListener('keydown', e => {
+  const typing = e.target.matches && e.target.matches('input,textarea,select,[contenteditable]');
+  // Ctrl+PageDown = next tab, Ctrl+PageUp = previous tab
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey &&
+      (e.key === 'PageDown' || e.key === 'PageUp' || e.code === 'PageDown' || e.code === 'PageUp')) {
+    if (typing) e.target.blur();
+    switchTab((e.key === 'PageDown' || e.code === 'PageDown') ? 1 : -1);
+    e.preventDefault();
+    return;
+  }
+});
+
+function connect(){
+  const ws = new WebSocket((location.protocol==='https:'?'wss://':'ws://') + location.host + '/ws');
+  ws.onmessage = ev => { try { S.snap = JSON.parse(ev.data); render(); } catch(e) { console.error(e); } };
+  ws.onclose = () => { $('feedpill').className='pill bad'; $('feedtxt').textContent='app server disconnected'; setTimeout(connect, 1500); };
+}
+connect();
+</script>
+</body>
+</html>

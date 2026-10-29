@@ -1,0 +1,30 @@
+name: Publish separate Windows applications
+on:
+  push:
+    tags:
+      - "windows-split-v*"
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify and publish candidate assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd releases/windows-split-0.2.0-rc1
+          sha256sum --check SHA256SUMS.txt
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --prerelease --title "Separate WhiteGamma and KE2 apps 0.2.0-rc1" --notes-file RELEASE_NOTES.md
+          fi
+          gh release upload "$RELEASE_TAG" KE2Feed.exe WhiteGamma.exe GammaSimulator.exe ke2_feed.dll README.md BUILD_INFO.json SHA256SUMS.txt THIRD_PARTY_LICENSES.zip --clobber

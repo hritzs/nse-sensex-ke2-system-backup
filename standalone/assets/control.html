@@ -1,0 +1,37 @@
+<!doctype html><meta charset="utf-8"><title>WhiteGamma system</title>
+<style>
+body{margin:0;background:#101722;color:#dfe8f3;font:14px system-ui}nav{display:flex;align-items:center;gap:8px;padding:10px;background:#1e2b3e}
+button{background:#2c4360;color:white;border:1px solid #4d6687;border-radius:5px;padding:8px;cursor:pointer}
+#source{margin-left:auto}iframe{width:100%;height:calc(100vh - 58px);border:0;background:white}
+#system{padding:20px;max-width:1100px}textarea{width:100%;height:330px;background:#080f18;color:#cfe5fa;font:13px monospace}
+pre{white-space:pre-wrap;overflow-wrap:anywhere}a{color:#a5d6ff}.warning{color:#ffd47b}
+</style><nav><b id="title">WhiteGamma</b>
+<button onclick="view('whitegamma')">Application</button><button onclick="view('gamma')">Simulation</button>
+<button onclick="view('indicative')">Indicative</button><button onclick="view('tester','/docs')">API tester</button>
+<button onclick="system()">System / peers</button><span id="source">Starting...</span></nav>
+<iframe id="frame" hidden></iframe><main id="system"><h2>Local feed and peer failover</h2>
+<p>Each PC publishes its own native feed. This application uses local data first and verified peers if a stream becomes stale.
+NSE, BSE derivatives and BSE indices select sources independently.</p>
+<p class="warning">Live data requires exchange multicast access or a reachable, matching native peer.
+Bundled reference data is a dated snapshot. Configure authoritative input_sources for daily refresh.</p>
+<p><button onclick="loadSettings()">Load settings</button> <button onclick="saveSettings()">Save settings and restart owned services</button>
+<button onclick="post('/api/refresh')">Refresh inputs</button> <button onclick="post('/api/restart')">Restart owned services</button>
+<button onclick="post('/api/shutdown')">Stop and exit</button></p>
+<p>Add peers as <code>{"name":"desk-b","raw_url":"ws://192.168.1.22:19001/ke2-source"}</code>.
+The peer must run this standalone native publisher with matching masters. List peers in priority order.
+Set interface to the PC's feed-facing IPv4 address when needed.</p>
+<textarea id="settings" spellcheck="false"></textarea><p id="result"></p><h3>Services, data sources and BOD</h3><pre id="status"></pre></main>
+<script>
+let ports={};let loaded=false;
+function view(key,path='/'){document.querySelector('#system').hidden=true;let f=document.querySelector('#frame');f.hidden=false;f.src='http://127.0.0.1:'+ports[key]+path}
+function system(){document.querySelector('#frame').hidden=true;document.querySelector('#system').hidden=false}
+async function post(url,body){let r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});let v=await r.json();document.querySelector('#result').textContent=JSON.stringify(v);return r.ok}
+async function loadSettings(){let v=await(await fetch('/api/settings')).json();document.querySelector('#settings').value=JSON.stringify(v,null,2)}
+async function saveSettings(){try{await post('/api/settings',JSON.parse(document.querySelector('#settings').value))}catch(e){document.querySelector('#result').textContent=e.message}}
+async function poll(){try{let s=await(await fetch('/api/status')).json();ports=s.ports;
+document.querySelector('#status').textContent=JSON.stringify(s,null,2);
+document.querySelector("#title").textContent=s.profile==="feed"?"KE2 Feed":s.profile==="simulator"?"Gamma Simulator":"WhiteGamma";
+let selected=s.feed?.selected||{};document.querySelector('#source').textContent=(s.feed?Object.entries(selected).map(([k,v])=>k+': '+(v?(v==='local'?'local':v+' '+(s.feed.source_endpoints?.[v]||'')):'NO FRESH SOURCE')).join(' | '):'External feed: '+(s.feed_url||s.source_url||'configure settings'));
+if(!loaded){loaded=true;await loadSettings()}}catch(e){document.querySelector('#source').textContent='Control disconnected'}}
+poll();setInterval(poll,2000)
+</script>

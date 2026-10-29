@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "interface": "0.0.0.0",
+  "publish_host": "0.0.0.0",
+  "peers": [],
+  "stale_seconds": 10,
+  "recovery_seconds": 15,
+  "ports": {
+    "raw": 19001,
+    "publish": 19002,
+    "tester": 19003,
+    "routed": 19004,
+    "routed_raw": 19005,
+    "gamma": 18000,
+    "indicative": 18100,
+    "whitegamma": 18200,
+    "control": 18201
+  },
+  "bod_time_ist": "08:45",
+  "input_sources": {},
+  "description": "Peer example: {\"name\":\"desk-b\",\"raw_url\":\"ws://192.168.1.22:19001/ke2-source\"}. Only native standalone publishers are accepted. Configure authoritative input_sources to enable daily refresh."
+}

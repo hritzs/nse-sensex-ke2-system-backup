@@ -219,6 +219,14 @@ def main():
     group.add_argument("--status",action="store_true")
     args=parser.parse_args()
     BOD.mkdir(parents=True,exist_ok=True)
+    if args.start or args.stop or args.refresh:
+        from scripts.service_control import audit_event
+        try:
+            action = "start" if args.start else "stop" if args.stop else "refresh"
+            audit_event(action, "requested", source="bod-manager",
+                        pause_before=(BOD/"paused").exists())
+        except OSError as exc:
+            print("Control audit could not be written: "+str(exc),file=sys.stderr)
     if args.status:
         print((BOD/"status.json").read_text() if (BOD/"status.json").exists() else "{}")
         return

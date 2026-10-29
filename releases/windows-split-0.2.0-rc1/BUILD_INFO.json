@@ -1,0 +1,49 @@
+{
+  "version": "0.2.0-rc1",
+  "created_at": "2026-10-29T11:18:49.187199+00:00",
+  "status": "PRERELEASE_WINDOWS_ACCEPTANCE_PENDING",
+  "products": [
+    {
+      "name": "KE2Feed.exe",
+      "bytes": 51142354,
+      "sha256": "a47c24e66a46eff34ac42cc5463ccf500768806f17764f631db97261b1e98ec0",
+      "windows_execution_verified": false
+    },
+    {
+      "name": "WhiteGamma.exe",
+      "bytes": 51142360,
+      "sha256": "4ba22947e4b784c6a62ffa7e2ba3bae9c7241ec914baeb0e63dd71a2d93bfa09",
+      "windows_execution_verified": false
+    },
+    {
+      "name": "GammaSimulator.exe",
+      "bytes": 51142377,
+      "sha256": "4b7b71c768dd9f5d34b01c71eb03012936b5e1d7a8f8e237493d41003ce60a36",
+      "windows_execution_verified": false
+    }
+  ],
+  "linux_process_acceptance": {
+    "ok": true,
+    "feed_services": [
+      "feed",
+      "tester",
+      "indicative"
+    ],
+    "whitegamma_services": [
+      "whitegamma"
+    ],
+    "gamma_services": [
+      "gamma"
+    ],
+    "gamma_source_identity_verified": true,
+    "all_application_endpoints": true,
+    "stopping_gamma_leaves_feed_running": true,
+    "stopping_whitegamma_leaves_simulator_running": true,
+    "gamma_owned_workers_stopped": true,
+    "live_derivatives_verified": false
+  },
+  "windows_blocker": "Build machine Application Control previously blocked pandas native model import; full frozen Windows GUI/multicast has not been validated.",
+  "private_portfolio_state_included": false,
+  "dated_reference_seed_included": true,
+  "native_sdk_abi": 1
+}

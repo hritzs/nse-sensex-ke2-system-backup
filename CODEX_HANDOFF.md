@@ -75,3 +75,38 @@ service was started or restarted during launcher development.
 - Instructions: [KE2_FASTAPI_TESTER.md](KE2_FASTAPI_TESTER.md).
 - Six API integration tests and two launcher lifecycle tests passed.
 - Production feed/simulator services were not restarted.
+
+## Standalone WhiteGamma candidate 0.1.0-rc1 (29 October 2026)
+
+See WHITEGAMMA_STANDALONE.md and standalone/ARCHITECTURE.md for the complete
+desktop integration, endpoint, BOD, source-selection and validation notes.
+Artifacts are in dist/whitegamma-standalone. The Windows EXE embeds the decoder
+DLL, existing WhiteGamma calculations, KE2, Gamma, indicative and API tester.
+The native peer publisher is port 19001; the LAN routed KE2 API is port 19002.
+Local-first per-stream failover uses 10-second freshness and 15-second local
+recovery. Peers must run native publishers with matching instrument metadata.
+
+Linux: 16 new standalone tests and 41 existing regression tests passed; all five
+service checks passed on isolated ports and fresh data. Windows: seven selection
+and owned-process tests passed; the EXE archive/resources were verified.
+Full frozen Windows acceptance remains pending: Application Control blocked
+pandas fields.cp314-win_amd64.pyd during the source model diagnostic. Do not
+disable or bypass that policy and do not claim Windows production readiness.
+The existing NSE packet-layout discrepancy is unchanged. Indicative's separate
+NSE CM stream remains local and is not supplied by KE2 peer failover.
+
+Verified offline artifacts:
+backups/standalone/20261029-104051 and Windows
+C:/Users/Administrator/Backups/NSE-KE2/whitegamma-standalone-0.1.0-rc1-20261029.
+No production database was imported. All isolated test services were stopped.
+
+## Three separate Windows EXEs (0.2.0-rc1)
+
+The user explicitly selected separate executables for WhiteGamma and the Gamma
+simulator, in addition to the feed. WhiteGamma.exe owns only the application;
+GammaSimulator.exe owns only simulation; KE2Feed.exe owns decoder, KE2,
+indicative and Swagger. See SEPARATE_WINDOWS_APPS.md. Their compiled entry points
+fix independent profiles, user-data folders and control ports. The isolated
+three-process acceptance passed, including Gamma source identity verification
+and independent shutdown. Windows frozen runtime acceptance remains pending
+because of the previously observed Application Control dependency block.

@@ -1,0 +1,79 @@
+{
+  "daily_last_date": "2026-10-29",
+  "built_at": "2026-10-29T10:36:28.192825+00:00",
+  "files": [
+    {
+      "path": "shared/GreekTokens.csv",
+      "bytes": 118823338,
+      "sha256": "12796d026b72239ae5984859b01e394d37fdb8744f163af365b272e379781578",
+      "source_modified_utc": "2026-10-29T09:01:57.877880+00:00"
+    },
+    {
+      "path": "shared/BSEIndexTokens.csv",
+      "bytes": 8497641,
+      "sha256": "c9728822e7a938bce38456daa4cf597ad89e3bf1fc276f72d1292ed5cc878881",
+      "source_modified_utc": "2026-10-28T08:40:56.352416+00:00"
+    },
+    {
+      "path": "shared/cm_bhavcopy/current.csv",
+      "bytes": 633113,
+      "sha256": "cbfbfbd7b4ed3d54fadf8857b0f4c7a1e603052045013fb6b2bc7bf72e451f94",
+      "source_modified_utc": "2026-10-28T20:16:50.898093+00:00"
+    },
+    {
+      "path": "shared/bod_bhavcopy/nse-fo/current.csv",
+      "bytes": 3184548,
+      "sha256": "99173ada90183c23b4c26e6d26e1fe2cb374f069b4b7a37fad0f6e789a5dde14",
+      "source_modified_utc": "2026-10-28T20:16:49.981051+00:00"
+    },
+    {
+      "path": "shared/bod_bhavcopy/bse-fo/current.csv",
+      "bytes": 96577,
+      "sha256": "949cb2508a536e8ddeab13bf8048ba0e9c8316022c5781c7b6b5b13d92e75d48",
+      "source_modified_utc": "2026-10-28T20:16:50.578934+00:00"
+    },
+    {
+      "path": "data/gamma_inputs/GammaShortDailydata.csv",
+      "bytes": 531694,
+      "sha256": "de1b0d37b7235fad96f575cedf6655d95e3e652a52e1481fc1c18a8219a3ea40",
+      "source_modified_utc": "2026-10-29T08:35:56.214825+00:00"
+    },
+    {
+      "path": "data/gamma_inputs/EventDates.xlsx",
+      "bytes": 10489,
+      "sha256": "6666e0bf67d83a92b4dd55c6a37ac64e08dd3564fe5ffe59d68c23660ca77d3a",
+      "source_modified_utc": "2026-06-08T18:25:20.741762+00:00"
+    },
+    {
+      "path": "live_lut/final_r46V2/LUT_0916.csv",
+      "bytes": 3058337,
+      "sha256": "807319199a93e6cf5a5ee9833ee55253cd86aaa471a71e6df236df0e061815c4",
+      "source_modified_utc": "2026-09-02T09:31:06.848397+00:00"
+    },
+    {
+      "path": "live_lut/final_r46V2/LUT_0917.csv",
+      "bytes": 3064370,
+      "sha256": "2d3814e7db0bccec8a5468160047dbfb5a9f0beb5589913499bec14f20bda48f",
+      "source_modified_utc": "2026-09-02T09:31:07.533478+00:00"
+    },
+    {
+      "path": "live_lut/final_r46V2/LUT_0918.csv",
+      "bytes": 3068045,
+      "sha256": "3293771ec1eb80089512ebca55adb1c25b26673fadda200e0e0fba7e97afff37",
+      "source_modified_utc": "2026-09-02T09:31:07.969009+00:00"
+    },
+    {
+      "path": "live_lut/final_r46V2/LUT_0919.csv",
+      "bytes": 3065927,
+      "sha256": "3d0c637ac2880ed2feba244ee5b94a9c13190c52e2eb47b7003f0ce60e8400da",
+      "source_modified_utc": "2026-09-02T09:31:08.423735+00:00"
+    },
+    {
+      "path": "live_lut/final_r46V2/LUT_0920_Onwards.csv",
+      "bytes": 3061766,
+      "sha256": "131d9a1140f00c36df7b3d0c81df5aad455445230fe8260442cc76de0492be0d",
+      "source_modified_utc": "2026-09-02T09:31:08.848972+00:00"
+    }
+  ],
+  "excluded": "No positions, trade inputs, marks, private configuration, history databases or logs."
+}

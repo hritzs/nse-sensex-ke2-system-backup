@@ -18,7 +18,7 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
-EXCLUDED_DIRS = {".git", "venv", "venvdash", ".venv", ".venv-ke2-api",
+EXCLUDED_DIRS = {".git", ".buildenv", "venv", "venvdash", ".venv", ".venv-ke2-api",
                  "node_modules", "build", "build-ke2", "__pycache__", "logs",
                  ".aws", ".azure", ".ssh", ".codex", ".agents", ".cache"}
 SECRET = re.compile(rb"(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[A-Z0-9]{16}|-----BEGIN (?:OPENSSH|RSA|EC) PRIVATE KEY-----)")
@@ -84,6 +84,10 @@ def candidates(root):
 
 def private_file(path,rel,header):
     return (rel.parts[0] in ("data","docker-data","user_configs")
+            or (rel.parts[0]=="whitegammaApp" and path.name in {"config.json","config.wsl.json","trade_check.txt","marks.json","ui_state.json","box.json"})
+            or (rel.parts[0]=="whitegammaApp" and "samples" in rel.parts)
+            or (len(rel.parts)>1 and rel.parts[:2]==("backups","whitegamma_standalone_before_changes"))
+            or (rel.parts[0]=="standalone" and "assets" in rel.parts and "seed" in rel.parts)
             or path.name in {"screener_snapshot.jsonl",".npmrc",".pypirc",".netrc",".git-credentials","credentials.json"}
             or path.name.startswith(".env")
             or path.suffix.lower() in (".lic",".token",".secret",".pem",".key",".zip",".gz",".tgz",".bundle")

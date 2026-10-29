@@ -1,3 +1,17 @@
+## Separate Windows applications
+
+[Download the separate WhiteGamma and KE2 prerelease](https://github.com/hritzs/nse-sensex-ke2-system-backup/releases/tag/windows-split-v0.2.0-rc1).
+
+- KE2Feed.exe owns decoder, KE2, indicative and Swagger.
+- WhiteGamma.exe owns only the WhiteGamma app.
+- GammaSimulator.exe independently owns the all-expiry Gamma simulator.
+
+See [startup and LAN configuration](SEPARATE_WINDOWS_APPS.md) and
+[standalone architecture](standalone/ARCHITECTURE.md).
+These are release candidates: full frozen Windows GUI/multicast acceptance is
+pending; the build PC blocked a pandas native dependency through Application Control.
+Existing portfolio state and historical databases are excluded.
+
 # Run the complete system
 
 From Ubuntu WSL run bash run_all.sh. This starts/restarts the decoder, KE2,
